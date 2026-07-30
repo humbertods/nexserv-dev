@@ -8,22 +8,11 @@
   // ============================================
   // NexServ · Conexión a Google Sheets
   // ============================================
-  // Selección de entorno (dev / prod). Prod por defecto: las tablets
-  // del salón quedan SIEMPRE en producción salvo que se abran a
-  // propósito con ?env=dev. La elección queda recordada en el
-  // dispositivo. Para volver a producción: abrir con ?env=prod.
-  const ENV = (function () {
-    try {
-      const q = new URLSearchParams(location.search).get('env');
-      if (q === 'dev' || q === 'prod') { localStorage.setItem('nexserv_env', q); return q; }
-      return localStorage.getItem('nexserv_env') === 'dev' ? 'dev' : 'prod';
-    } catch (e) { return 'prod'; }
-  })();
-  const API_URLS = {
-    prod: 'https://script.google.com/macros/s/AKfycbyS9YonMU50Oq811-kPyOBUQoksDFVwT5AQ2P4U0BN9IJaJJCAV2HeZ5L1A0bMWMjcL/exec',
-    dev:  'https://script.google.com/macros/s/AKfycbwbCYRXduTSyVSmX7yDSkgLD_5sqW3wWrWP4AkNC0blCGHn2RYASyT2rucTsAJWWtKuQQ/exec'   // ← URL /exec del deployment de pruebas
-  };
-  const API_URL = API_URLS[ENV];
+  // Este frontend (nexserv-dev) es un proyecto independiente, exclusivo
+  // del entorno DEV. No hay selección de entorno ni parámetro ?env=dev/prod:
+  // ENV y API_URL quedan fijos apuntando siempre al backend DEV.
+  const ENV = 'dev';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbwbCYRXduTSyVSmX7yDSkgLD_5sqW3wWrWP4AkNC0blCGHn2RYASyT2rucTsAJWWtKuQQ/exec';
 
   // ── Versión de la app (debe coincidir con APP_VERSION del backend) ──
   // Subila en cada cambio que despliegues a GitHub Pages. Al abrir, la app
@@ -31,17 +20,16 @@
   // muestra un aviso para recargar (cura el problema de caché vieja).
   const APP_VERSION = '5.3';
 
-  // Sello visual rojo "DEV" para que nunca se confunda con producción.
-  if (ENV === 'dev') {
-    try {
-      document.addEventListener('DOMContentLoaded', function () {
-        var b = document.createElement('div');
-        b.textContent = 'DEV';
-        b.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;background:#b91c1c;color:#fff;font:700 11px sans-serif;padding:2px 8px;border-bottom-right-radius:6px;letter-spacing:1px;pointer-events:none;';
-        document.body.appendChild(b);
-      });
-    } catch (e) {}
-  }
+  // Sello visual rojo "DEV": este frontend es exclusivamente DEV, así que
+  // se muestra siempre, sin depender de ENV === 'dev'.
+  try {
+    document.addEventListener('DOMContentLoaded', function () {
+      var b = document.createElement('div');
+      b.textContent = 'DEV';
+      b.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;background:#b91c1c;color:#fff;font:700 11px sans-serif;padding:2px 8px;border-bottom-right-radius:6px;letter-spacing:1px;pointer-events:none;';
+      document.body.appendChild(b);
+    });
+  } catch (e) {}
 
   // Etiqueta discreta de versión (abajo a la derecha) + chequeo de actualización.
   function _mostrarVersionLabel() {
