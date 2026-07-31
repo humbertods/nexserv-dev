@@ -2608,7 +2608,13 @@
         codigo: codigo, nombre: nombre, prioridad: 'Normal',
         observaciones: obs, areas: areasMultiGA,
         secuencia: window._secuencia.map(s => s.area),
-        asignadaA: chica
+        asignadaA: chica,
+        // areaInicial: única forma de que el backend sepa cuál era el área
+        // activa del formulario al momento de "Asignar directo" — data.areas
+        // no lo indica (el orden de sus componentes no es significativo,
+        // ver buildTMAreasFromForm), así que sin este campo la asignación
+        // por familia de área (promo nativa) no tendría con qué comparar.
+        areaInicial: areaKey
       });
       if (tmResult && tmResult.success) {
         initFormTM();
