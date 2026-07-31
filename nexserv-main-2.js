@@ -1793,16 +1793,91 @@
           });
           if (_mias.length > 0) {
             _peSection.style.display = 'block';
+            // Bloque 2N-2B.1 Parte B — la selección local es efímera: se
+            // reconstruye en cada render (no persiste entre recargas; eso es
+            // responsabilidad de Parte D). Reset acá evita mezclar selección
+            // entre clientas o entre renders (B-UI8).
+            window._subticketSeleccion = {};
+            window._subticketComponentes = {};
             _peList.innerHTML = _mias.map(function (w) {
               const _cod = String(w.codigo || '').replace(/'/g, "\\'");
               const _nom = String(w.nombre || '').replace(/'/g, "\\'");
               const _svc = String(w.servicio || w.promoNombre || 'Servicio');
               const _tot = Number(w.total || 0);
+              const _idEspera = String(w.idEspera || w.id || w.ticket_ref || '');
+
+              // Compatibilidad legacy (regla obligatoria — Corrección B.1):
+              // el selector nuevo SOLO se activa si hay más de un componente
+              // Y TODOS traen id real (identidad estable de Parte A). Si
+              // alguno no trae id (formato anterior / desglose parcial),
+              // el ticket completo conserva EXACTAMENTE el botón y
+              // comportamiento legacy — no se arma un selector híbrido
+              // (0 componentes, 1 componente, o 2+ con alguno sin id →
+              // botón legacy; 2+ con TODOS con id → selector nuevo).
+              const _detalle = Array.isArray(w.serviciosDetalle) ? w.serviciosDetalle : [];
+              const _tieneComponentesReales = _detalle.length > 1 && _detalle.every(function (c) {
+                return c && c.id !== undefined && c.id !== null && String(c.id).trim() !== '';
+              });
+
+              if (!_tieneComponentesReales) {
+                return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
+                  + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
+                  + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
+                  + '<button onclick="iniciarClientaStaff(\'' + _cod + '\',\'' + _nom + '\')" '
+                  + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
+                  + '</div>';
+              }
+
+              // ── Selector real de subtickets (Parte B) ────────────────────────
+              // Identidad por componente.id (nunca nombre/monto/posición). Se
+              // guarda el objeto REAL completo (id/promoRef/ticketRef/estado/
+              // staff/servicio/area/monto — ver Parte A) solo para los
+              // componentes seleccionables, para que la confirmación local
+              // (sin backend todavía — Parte C) lea la identidad exacta.
+              window._subticketComponentes[_idEspera] = window._subticketComponentes[_idEspera] || {};
+              window._subticketSeleccion[_idEspera] = window._subticketSeleccion[_idEspera] || {};
+
+              const _filas = _detalle.map(function (c) {
+                const _cid = (c.id !== undefined && c.id !== null) ? String(c.id).trim() : '';
+                const _cStaff = String(c.staff || '').trim();
+                const _cEstado = String(c.estado || '').toLowerCase().trim();
+                const _esMia = _cStaff === user.name;
+                // Regla obligatoria: checkbox SOLO si estado==='esperando' Y
+                // staff===staffActual Y id válido no vacío. Cualquier otra
+                // combinación (en_servicio/por_verificar/completado/cobrado/
+                // anulado/otra staff/sin id) queda bloqueada, no seleccionable.
+                const _seleccionable = _cEstado === 'esperando' && _esMia && _cid !== '';
+                const _label = String(c.servicio || c.area || 'Servicio');
+                const _monto = Number(c.monto || 0);
+
+                if (_seleccionable) {
+                  window._subticketComponentes[_idEspera][_cid] = c;
+                  const _cidAttr = _cid.replace(/'/g, "\\'");
+                  return '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);cursor:pointer;">'
+                    + '<input type="checkbox" onchange="toggleSubticketSeleccion(\'' + _idEspera + '\',\'' + _cidAttr + '\', this.checked)" style="width:18px;height:18px;flex:none;">'
+                    + '<span style="font-size:13px;flex:1;">' + _label + (_monto ? (' · $' + _monto) : '') + '</span>'
+                    + '</label>';
+                }
+
+                // No seleccionable: se muestra bloqueada/informativa, nunca oculta.
+                const _motivoLabel = !_esMia
+                  ? ('Asignado a ' + (_cStaff || 'otra staff'))
+                  : ({ en_servicio: 'EN CURSO', por_verificar: 'COMPLETADO', completado: 'LISTO PARA COBRO',
+                       anulado: 'ANULADO', cobrado: 'COBRADO' }[_cEstado] || (_cEstado ? _cEstado.toUpperCase() : 'BLOQUEADO'));
+                return '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);opacity:0.55;">'
+                  + '<span style="width:18px;flex:none;text-align:center;">🔒</span>'
+                  + '<span style="font-size:13px;flex:1;">' + _label + (_monto ? (' · $' + _monto) : '') + '</span>'
+                  + '<span style="font-size:10px;font-weight:800;color:var(--ink-faint);white-space:nowrap;">' + _motivoLabel + '</span>'
+                  + '</div>';
+              }).join('');
+
               return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
                 + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
                 + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-                + '<button onclick="iniciarClientaStaff(\'' + _cod + '\',\'' + _nom + '\')" '
-                + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
+                + '<div style="background:var(--bg);border-radius:12px;padding:2px 12px;margin-bottom:10px;">' + _filas + '</div>'
+                + '<div id="subSelMsg_' + _idEspera + '" style="font-size:12px;color:var(--ink-faint);font-weight:700;margin-bottom:8px;">Selecciona al menos un servicio</div>'
+                + '<button id="subSelBtn_' + _idEspera + '" disabled onclick="confirmarSeleccionSubtickets(\'' + _idEspera + '\',\'' + _cod + '\',\'' + _nom + '\')" '
+                + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:not-allowed;opacity:0.5;">▶ Iniciar seleccionados (0)</button>'
                 + '</div>';
             }).join('');
           } else {
@@ -2081,6 +2156,163 @@
       console.error('Error cargando staff home:', err);
     }
   }
+
+  // ── Bloque 2N-2B.1 Parte B — selección local de subtickets ──────────────
+  // Identidad SIEMPRE por componente.id (nunca nombre/monto/posición/índice/
+  // nombre de clienta). window._subticketSeleccion[idEspera] = { [id]: true }.
+  // window._subticketComponentes[idEspera] = { [id]: <objeto real completo> }
+  // (llenado en el render de "Por empezar", solo con componentes seleccionables).
+  // IMPORTANTE — Parte B creó la selección local.
+  // Parte C conecta confirmarSeleccionSubtickets con el backend real.
+  // La identidad continúa siendo componente.id y la vía legacy permanece intacta.
+  function toggleSubticketSeleccion(idEspera, componenteId, checked) {
+    window._subticketSeleccion = window._subticketSeleccion || {};
+    window._subticketSeleccion[idEspera] = window._subticketSeleccion[idEspera] || {};
+    if (checked) {
+      window._subticketSeleccion[idEspera][componenteId] = true;
+    } else {
+      delete window._subticketSeleccion[idEspera][componenteId];
+    }
+    _refrescarContadorSubtickets(idEspera);
+  }
+  window.toggleSubticketSeleccion = toggleSubticketSeleccion;
+
+  function _refrescarContadorSubtickets(idEspera) {
+    const _sel = (window._subticketSeleccion && window._subticketSeleccion[idEspera]) || {};
+    const _n = Object.keys(_sel).length;
+    const _elMsg = document.getElementById('subSelMsg_' + idEspera);
+    const _elBtn = document.getElementById('subSelBtn_' + idEspera);
+    if (_elMsg) {
+      _elMsg.textContent = _n > 0 ? (_n + ' servicio' + (_n > 1 ? 's' : '') + ' seleccionado' + (_n > 1 ? 's' : '')) : 'Selecciona al menos un servicio';
+    }
+    if (_elBtn) {
+      _elBtn.disabled = _n === 0;
+      _elBtn.textContent = '▶ Iniciar seleccionados (' + _n + ')';
+      _elBtn.style.opacity = _n === 0 ? '0.5' : '1';
+      _elBtn.style.cursor = _n === 0 ? 'not-allowed' : 'pointer';
+    }
+  }
+  window._refrescarContadorSubtickets = _refrescarContadorSubtickets;
+
+  // ── Bloque 2N-2B.1 Parte C — conexión real del selector al backend ──────
+  // confirmarSeleccionSubtickets ahora SÍ llama al backend real vía
+  // apiPost('tomarClienta'). El payload se construye EXCLUSIVAMENTE desde
+  // window._subticketComponentes[idEspera] (objetos reales de Parte A/B) —
+  // nunca se reconstruye desde el DOM, nunca se envían nombres/índices/
+  // montos como identidad. iniciarClientaStaff/legacy NO se toca — sigue
+  // usando apiPost('iniciarServicioStaff', ...) sin cambios.
+  async function confirmarSeleccionSubtickets(idEspera, codigo, nombre) {
+    const _elMsg = document.getElementById('subSelMsg_' + idEspera);
+    const _elBtn = document.getElementById('subSelBtn_' + idEspera);
+
+    // Guard anti-doble-submit por ticket (frontend). El hardening de
+    // concurrencia en backend (LockService) queda para Parte C.1 — fuera
+    // de alcance acá.
+    window._subticketEnvioEnCurso = window._subticketEnvioEnCurso || {};
+    if (window._subticketEnvioEnCurso[idEspera]) return; // segundo toque ignorado
+
+    // ── Validaciones frontend obligatorias, ANTES de cualquier apiPost ──
+    if (!idEspera) {
+      if (_elMsg) _elMsg.textContent = 'Error: idEspera vacío — no se envió nada';
+      return;
+    }
+    const user = window.currentUser;
+    if (!user || !String(user.name || '').trim()) {
+      if (_elMsg) _elMsg.textContent = 'Error: sesión de staff no disponible — no se envió nada';
+      return;
+    }
+    const _sel = (window._subticketSeleccion && window._subticketSeleccion[idEspera]) || {};
+    const _ids = Object.keys(_sel);
+    if (_ids.length === 0) {
+      // Selección vacía: no continúa, cero llamadas API (B-UI4 / C-BE7).
+      if (_elMsg) _elMsg.textContent = 'Selecciona al menos un servicio';
+      return;
+    }
+    // componentesSeleccionados SOLO desde window._subticketComponentes —
+    // nunca reconstruido desde el DOM. Si algún id seleccionado no tiene
+    // componente real en el mapa (o el componente no trae id real), no se
+    // envía la petición; la tarjeta y la selección quedan visibles tal cual.
+    const _mapa = (window._subticketComponentes && window._subticketComponentes[idEspera]) || {};
+    const componentesSeleccionados = [];
+    for (var i = 0; i < _ids.length; i++) {
+      var _c = _mapa[_ids[i]];
+      if (!_c || _c.id === undefined || _c.id === null || String(_c.id).trim() === '') {
+        if (_elMsg) _elMsg.textContent = 'Error: selección inconsistente — volvé a marcar los servicios';
+        console.warn('[confirmarSeleccionSubtickets] id seleccionado sin componente real en el mapa:', idEspera, _ids[i]);
+        return;
+      }
+      componentesSeleccionados.push(_c);
+    }
+
+    // ── A partir de acá SÍ se envía la petición — activar guard visual ──
+    window._subticketEnvioEnCurso[idEspera] = true;
+    if (_elBtn) {
+      _elBtn.disabled = true;
+      _elBtn.textContent = 'Iniciando...';
+      _elBtn.style.opacity = '0.6';
+      _elBtn.style.cursor = 'not-allowed';
+    }
+
+    try {
+      const r = await apiPost('tomarClienta', {
+        idEspera: idEspera,
+        chicaNombre: user.name,
+        componentesSeleccionados: componentesSeleccionados
+      });
+
+      // No asumir éxito solo por response.success === true — leer los
+      // conteos reales que devuelve iniciarComponentesTicketNativoPorRef_.
+      if (!r || r.success !== true) {
+        // Error backend: no limpiar selección, no quitar la tarjeta, no
+        // tocar slotServices. El guard se libera en el finally.
+        const _errMsg = (r && (r.message || r.error)) || 'No se pudo iniciar';
+        if (_elMsg) _elMsg.textContent = 'Error: ' + _errMsg;
+        if (typeof showToast === 'function') showToast('⚠ Error al iniciar: ' + _errMsg);
+        return;
+      }
+
+      const _iniciadas = Array.isArray(r.iniciadas) ? r.iniciadas : [];
+      const _yaEnServicio = Array.isArray(r.ya_en_servicio) ? r.ya_en_servicio : [];
+      const _noEncontradas = Array.isArray(r.no_encontradas) ? r.no_encontradas : [];
+      const _pedidos = componentesSeleccionados.length;
+      const _cubiertos = _iniciadas.length + _yaEnServicio.length;
+
+      if (_noEncontradas.length === 0 && _cubiertos === _pedidos) {
+        // Éxito total.
+        if (typeof showToast === 'function') {
+          showToast('▶ ' + _cubiertos + ' servicio' + (_cubiertos > 1 ? 's' : '') + ' iniciado' + (_cubiertos > 1 ? 's' : '') + ' con ' + (nombre || 'la clienta'));
+        }
+      } else {
+        // Éxito parcial (success:true pero hay no_encontradas, o los
+        // conteos no cuadran con lo pedido): NUNCA declarar éxito total.
+        if (typeof showToast === 'function') {
+          showToast('⚠ ' + _cubiertos + ' de ' + _pedidos + ' iniciado' + (_pedidos > 1 ? 's' : '')
+            + (_noEncontradas.length ? (' · ' + _noEncontradas.length + ' no encontrado' + (_noEncontradas.length > 1 ? 's' : '')) : ''));
+        }
+      }
+
+      // Limpieza local SOLO después de respuesta backend exitosa.
+      if (window._subticketSeleccion) delete window._subticketSeleccion[idEspera];
+      if (window._subticketComponentes) delete window._subticketComponentes[idEspera];
+
+      // La pantalla se reconstruye SIEMPRE desde el backend — nunca se
+      // manipulan checkboxes/estado manualmente como fuente de verdad.
+      await loadStaffHome();
+
+    } catch (e) {
+      console.error('[confirmarSeleccionSubtickets] error de red/excepción', e);
+      if (_elMsg) _elMsg.textContent = 'Error de red — volvé a intentar';
+      if (typeof showToast === 'function') showToast('⚠ Error de red al iniciar los servicios');
+      // Selección permanece, tarjeta no desaparece — no se toca el DOM manualmente.
+    } finally {
+      // Guard SIEMPRE liberado. Si hubo éxito, loadStaffHome() ya
+      // reconstruyó la lista (estos elementos pueden no existir más — no-op
+      // seguro). Si hubo error, esto restaura el botón/contador reales.
+      window._subticketEnvioEnCurso[idEspera] = false;
+      _refrescarContadorSubtickets(idEspera);
+    }
+  }
+  window.confirmarSeleccionSubtickets = confirmarSeleccionSubtickets;
 
   function loadActiveService(idx) {
     // Ya precargado en loadStaffHome
@@ -3830,9 +4062,15 @@
               // renglón (antes se concatenaban en una sola línea: "A + B + C + D").
               const _subticketsHTML = (a.serviciosDetalle && a.serviciosDetalle.length > 1)
                 ? a.serviciosDetalle.map(d => {
-                    const _detEnCurso = String(d.estado || '').toLowerCase() === 'en_servicio';
-                    const _badgeDet = _detEnCurso
-                      ? ' <span style=\"font-size:9px;font-weight:700;background:var(--info-bg);color:var(--info);padding:2px 6px;border-radius:100px;\">EN CURSO</span>'
+                    const _cfgDet = {
+                      en_servicio:   { texto: 'EN CURSO',         bg: 'var(--info-bg)',    color: 'var(--info)' },
+                      esperando:     { texto: 'PENDIENTE',        bg: 'var(--bg)',         color: 'var(--ink-faint)' },
+                      por_verificar: { texto: 'COMPLETADO',       bg: 'var(--success-bg)', color: 'var(--success)' },
+                      completado:    { texto: 'LISTO PARA COBRO', bg: 'var(--success-bg)', color: 'var(--success)' },
+                      anulado:       { texto: 'ANULADO',          bg: 'var(--danger-bg)',  color: 'var(--danger)' }
+                    }[String(d.estado || '').toLowerCase()];
+                    const _badgeDet = _cfgDet
+                      ? ' <span style=\"font-size:9px;font-weight:700;background:'+_cfgDet.bg+';color:'+_cfgDet.color+';padding:2px 6px;border-radius:100px;\">'+_cfgDet.texto+'</span>'
                       : '';
                     return `<div style=\"font-size:11px;color:var(--ink-soft);\">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong>${_badgeDet}</div>`;
                   }).join('')
