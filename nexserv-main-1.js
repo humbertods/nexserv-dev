@@ -1219,6 +1219,42 @@
   // Restaura servicios NORMALES (no promo, no TM) desde el backend cuando el slot
   // quedó vacío (ej. tras refrescar la PWA). No pisa lo que ya hay en memoria, así
   // los servicios permanecen visibles hasta que la staff toque un botón de acción.
+  // ══════════════════════════════════════════════════════════════════════
+  // Fase 0.2 corrección — HELPER ÚNICO DE RESTAURACIÓN PERSISTENTE
+  // Determina, para un serviciosDetalle real, qué componentes debe ver el
+  // panel OPERATIVO de una staff. Única fuente de verdad: estado real +
+  // staff real del componente — NUNCA una bandera de sesión efímera
+  // (window._takingSubticketIdsConfirmados puede seguir existiendo como
+  // evidencia temporal, pero no es necesaria para que esto sea correcto).
+  // Se reutiliza en las 7 rutas de reconstrucción — la regla vive UNA sola vez.
+  //
+  // Compatibilidad legacy: si NINGÚN componente trae 'estado' (formato
+  // antiguo), se devuelve el array tal cual (esModerno:false) — no se rompe
+  // nada existente. Si SÍ trae estados por componente (formato LINEAS
+  // moderno), se filtra a estado==='en_servicio' && staff===staffNombre,
+  // incluso si el resultado queda vacío — esa decisión (no caer al agregado
+  // a.servicio) la toma cada call site.
+  // ══════════════════════════════════════════════════════════════════════
+  function _serviciosDetalleActivosParaStaff_(detalles, staffNombre) {
+    const arr = Array.isArray(detalles) ? detalles : [];
+    if (!arr.length) return { lista: [], esModerno: false };
+
+    const tieneEstadosPorComponente = arr.some(function (sd) {
+      return String((sd && sd.estado) || '').trim() !== '';
+    });
+
+    if (!tieneEstadosPorComponente) {
+      // Legacy: ningún componente trae estado individual → conservar tal cual.
+      return { lista: arr, esModerno: false };
+    }
+
+    const conEstadoOperativo = arr.filter(function (sd) {
+      return String((sd && sd.estado) || '').trim().toLowerCase() === 'en_servicio'
+        && String((sd && sd.staff) || '').trim() === String(staffNombre || '').trim();
+    });
+    return { lista: conEstadoOperativo, esModerno: true };
+  }
+
   async function restaurarServiciosNormalesSlot(slot) {
     try {
       const user = window.currentUser;
@@ -1241,7 +1277,12 @@
       if (!a) a = res.atenciones[slot === 1 ? 0 : 1];
       if (!a || a.promoNombre) return; // promo → otra ruta
       if (a.serviciosDetalle && a.serviciosDetalle.length > 0) {
-        slotServices[slot] = a.serviciosDetalle.map(sd => ({
+        const _r7 = _serviciosDetalleActivosParaStaff_(a.serviciosDetalle, user.name);
+        if (_r7.esModerno && _r7.lista.length === 0) {
+          console.warn('[LINEAS] atención sin componentes en_servicio para esta staff', idEspera || (a && a.idEspera));
+          return; // slot vacío — no caer a a.servicio agregado, no inventar nada
+        }
+        slotServices[slot] = _r7.lista.map(sd => ({
           name: sd.servicio || sd.nombre || sd.name || '',
           price: Number(sd.monto || sd.precio || sd.price || 0),
           area: sd.area || a.area || ''
@@ -1413,22 +1454,45 @@
 
           // Restaurar servicios de la 1ª clienta desde el ticket
           if (!String(a1.idEspera||'').startsWith('TM-')) {
-            if (a1.promoNombre && a1.promoNombre.trim() !== '') {
-              // Es una promo → cargar el nombre de la promo en slotServices para que el modal lo muestre
-              // Buscar precio: total del ticket → precioRegular → PROMOS cargados
+            // Fase 0.3 corrección Parte B — PRECEDENCIA ABSOLUTA: el
+            // desglose se evalúa ANTES que promoNombre. Si es moderno (trae
+            // estados por componente), su resultado domina el slot por
+            // completo — promoNombre NUNCA lo reemplaza, ni siquiera vacío.
+            // La metadata de promo (para el flujo de cobro) puede seguir
+            // registrándose aparte, sin afectar qué se ve en el slot.
+            const _detalles5 = Array.isArray(a1.serviciosDetalle) ? a1.serviciosDetalle : [];
+            const _r5 = _detalles5.length > 0 ? _serviciosDetalleActivosParaStaff_(_detalles5, user.name) : null;
+
+            if (_r5 && _r5.esModerno) {
+              slotServices[1] = _r5.lista.map(function(sd){ return { name: sd.servicio || sd.nombre || sd.name, price: Number(sd.monto || sd.precio || sd.price || 0), area: sd.area || a1.area || '' }; });
+              if (_r5.lista.length === 0) {
+                console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (doLogin slot1)', a1.idEspera);
+              }
+              // Metadata de promo aparte (no reemplaza el slot ya calculado arriba).
+              if (a1.promoNombre && a1.promoNombre.trim() !== '' && !window._availablePromo) {
+                var _precioPromo1m = Number(a1.total || 0) || Number(a1.precioRegular || 0);
+                if (!_precioPromo1m && typeof PROMOS !== 'undefined' && PROMOS) {
+                  var _promoMatch1m = PROMOS.find(function(p){ return p.name === a1.promoNombre || p.promo === a1.promoNombre; });
+                  if (_promoMatch1m) _precioPromo1m = Number(_promoMatch1m.precio || _promoMatch1m.price || _promoMatch1m.precioPromo || 0);
+                }
+                window._availablePromo = { name: a1.promoNombre, price: _precioPromo1m, regular: Number(a1.precioRegular || a1.total || 0) };
+              }
+            } else if (a1.promoNombre && a1.promoNombre.trim() !== '') {
+              // Legacy sin estados (o sin desglose) + promoNombre: tratamiento
+              // anterior conservado tal cual, sin cambios de comportamiento.
               var _precioPromo1 = Number(a1.total || 0) || Number(a1.precioRegular || 0);
-              // Si aún es 0, buscar en PROMOS cargados por nombre
               if (!_precioPromo1 && typeof PROMOS !== 'undefined' && PROMOS) {
                 var _promoMatch = PROMOS.find(function(p){ return p.name === a1.promoNombre || p.promo === a1.promoNombre; });
                 if (_promoMatch) _precioPromo1 = Number(_promoMatch.precio || _promoMatch.price || _promoMatch.precioPromo || 0);
               }
               slotServices[1] = [{ name: a1.promoNombre, price: _precioPromo1, area: a1.area || '', status: 'aprobado', isPromo: true }];
-              // También registrar en _availablePromo para el flujo de cobro
               if (!window._availablePromo) {
                 window._availablePromo = { name: a1.promoNombre, price: _precioPromo1, regular: Number(a1.precioRegular || a1.total || 0) };
               }
-            } else if (a1.serviciosDetalle && a1.serviciosDetalle.length > 0) {
-              slotServices[1] = a1.serviciosDetalle.map(function(sd){ return { name: sd.servicio || sd.nombre || sd.name, price: Number(sd.monto || sd.precio || sd.price || 0), area: sd.area || a1.area || '' }; });
+            } else if (_r5) {
+              // Legacy con detalles, sin promoNombre: comportamiento previo
+              // (usar los detalles legacy tal cual, sin filtrar).
+              slotServices[1] = _r5.lista.map(function(sd){ return { name: sd.servicio || sd.nombre || sd.name, price: Number(sd.monto || sd.precio || sd.price || 0), area: sd.area || a1.area || '' }; });
             } else if (a1.servicio && a1.servicio !== '—') {
               let _n1 = a1.servicio;
               if (String(_n1).trim().startsWith('{')) { try { const _p1 = JSON.parse(_n1); _n1 = _p1.nombre || _p1.name || _n1; } catch(e){} }
@@ -1453,10 +1517,32 @@
               pintarNombre('as2Name', a2.nombre, a2.codigo, a2.esTop);
               const _as2cd = document.getElementById('as2Code'); if (_as2cd) _as2cd.textContent = a2.codigo + (a2.horaLlegada ? ' · Llegó ' + a2.horaLlegada : '');
               // Cargar servicios de la 2ª clienta si vienen del ticket
-              if (a2.promoNombre && a2.promoNombre.trim() !== '') {
+              // Fase 0.3 corrección Parte B — mismo tratamiento que slot1:
+              // el desglose se evalúa ANTES que promoNombre; si es moderno,
+              // domina el slot por completo (promoNombre nunca lo reemplaza).
+              const _detalles6 = Array.isArray(a2.serviciosDetalle) ? a2.serviciosDetalle : [];
+              const _r6 = _detalles6.length > 0 ? _serviciosDetalleActivosParaStaff_(_detalles6, user.name) : null;
+
+              if (_r6 && _r6.esModerno) {
+                slotServices[2] = _r6.lista.map(function(sd){ return {
+                  name: sd.servicio || sd.nombre || sd.name || '',
+                  price: Number(sd.monto || sd.precio || sd.price || 0),
+                  area: sd.area || a2.area || ''
+                }; });
+                if (_r6.lista.length === 0) {
+                  console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (doLogin slot2)', a2.idEspera);
+                }
+                if (a2.promoNombre && a2.promoNombre.trim() !== '' && !window._availablePromo) {
+                  window._availablePromo = { name: a2.promoNombre, price: Number(a2.total || 0), regular: Number(a2.precioRegular || a2.total || 0) };
+                }
+              } else if (a2.promoNombre && a2.promoNombre.trim() !== '') {
                 slotServices[2] = [{ name: a2.promoNombre, price: Number(a2.total || 0), area: a2.area || '', status: 'aprobado', isPromo: true }];
-              } else if (a2.serviciosDetalle && a2.serviciosDetalle.length > 0) {
-                slotServices[2] = a2.serviciosDetalle.map(function(sd){ return { name: sd.servicio || sd.name, price: Number(sd.monto || sd.price || 0), area: sd.area || '' }; });
+              } else if (_r6) {
+                slotServices[2] = _r6.lista.map(function(sd){ return {
+                  name: sd.servicio || sd.nombre || sd.name || '',
+                  price: Number(sd.monto || sd.precio || sd.price || 0),
+                  area: sd.area || a2.area || ''
+                }; });
               } else if (a2.servicio && a2.servicio !== '—') {
                 slotServices[2] = [{ name: a2.servicio, price: Number(a2.total || 0), area: a2.area || '' }];
               }
@@ -2315,7 +2401,14 @@
             precioRegular: w.precioRegular || '',
             total: w.total || 0,
             secuencia: w.secuencia || [],
-            promasExtra: w.promasExtra || []
+            promasExtra: w.promasExtra || [],
+            // Fase 0 corrección Parte 2 — NO recortar: estos campos ya vienen
+            // del backend (overlay LINEAS, Bloque 2N-2B.1 Parte A) y openTake
+            // los necesita para poder ofrecer el selector real de subtickets.
+            serviciosDetalle: w.serviciosDetalle || null,
+            ticketRef: w.ticket_ref || w.idEspera || w.id || '',
+            idEspera: w.idEspera || w.id || '',
+            fuente: w.fuente || ''
           };
         });
       }
@@ -2426,6 +2519,53 @@
 
     const splitEl = document.getElementById('takeDepiSplit');
     const normalEl = document.getElementById('takeNormal');
+    // Fase 0 corrección — restaurar SIEMPRE el botón legacy por defecto antes
+    // de decidir qué mostrar (una apertura anterior puede haberlo reemplazado
+    // con el selector de subtickets). No se toca index.html: el HTML original
+    // se restaura acá en JS.
+    const _TAKE_NORMAL_HTML_DEFAULT_ = '<button class="btn-primary" onclick="confirmTake()">Sí, tomarla</button>';
+    if (normalEl) normalEl.innerHTML = _TAKE_NORMAL_HTML_DEFAULT_;
+    window._takingSubticketActivo = false;
+    window._takingSubticketTicketRef = '';
+    window._takingSubticketIdsConfirmados = null;
+
+    // ── Fase 0 corrección — Parte 3: selector real de subtickets ────────────
+    // Prioridad ANTES de TM/depi-split legacy: si el ticket es nativo LINEAS
+    // con identidad estable (2+ componentes, TODOS con id real — misma regla
+    // centralizada en el helper compartido de nexserv-main-2.js), mostrar el
+    // selector con checkboxes reales. TM- queda excluido (tiene su propio
+    // selector por área, ya existente, en showConfirmServiceModal). Legacy o
+    // sin identidad completa: cae exactamente al comportamiento anterior.
+    const _esTM_ = w.id && String(w.id).startsWith('TM-');
+    const _detalleTake = Array.isArray(w.serviciosDetalle) ? w.serviciosDetalle : [];
+    if (!_esTM_ && typeof _tieneIdentidadEstableParaSelector_ === 'function'
+        && _tieneIdentidadEstableParaSelector_(_detalleTake)) {
+      window._takingSubticketActivo = true;
+      const _grupoId = String(w.ticketRef || w.idEspera || w.id || '');
+      window._takingSubticketTicketRef = _grupoId;
+      window._subticketComponentes = window._subticketComponentes || {};
+      window._subticketSeleccion = window._subticketSeleccion || {};
+      window._subticketComponentes[_grupoId] = {};
+      window._subticketSeleccion[_grupoId] = {};
+
+      const _filasNorm = normalizarComponentesSeleccionables_(_detalleTake, user ? user.name : '');
+      const _filasHtml = renderSelectorSubtickets_({
+        grupoId: _grupoId,
+        filas: _filasNorm,
+        mapaDestino: window._subticketComponentes[_grupoId]
+      });
+
+      if (normalEl) {
+        normalEl.innerHTML =
+          '<div style="background:var(--bg);border-radius:12px;padding:2px 12px;margin-bottom:10px;">' + _filasHtml + '</div>'
+          + '<div id="subSelMsg_' + _grupoId + '" style="font-size:12px;color:var(--ink-faint);font-weight:700;margin-bottom:8px;">Selecciona al menos un servicio</div>'
+          + '<button id="subSelBtn_' + _grupoId + '" class="btn-primary" disabled style="opacity:0.5;cursor:not-allowed;" onclick="confirmTake()">▶ Iniciar seleccionados (0)</button>';
+      }
+      if (splitEl) splitEl.style.display = 'none';
+      if (normalEl) normalEl.style.display = 'block';
+      document.getElementById('takeModal').classList.add('active');
+      return;
+    }
 
     // ── TICKET MULTI (TM-): mostrar solo el área de esta staff, botón simple ──
     if (w.id && String(w.id).startsWith('TM-')) {
@@ -2593,7 +2733,11 @@
   }
 
   async function confirmTake_() {
-    closeModal();
+    // Fase 0.1 corrección Parte B — el cierre del modal YA NO es incondicional
+    // acá. Legacy y TM cierran temprano (en su propia rama, comportamiento sin
+    // cambios). La rama nativa con selector NO cierra hasta confirmar éxito
+    // real del backend — así un error de red/backend deja el modal abierto,
+    // el checkbox marcado y permite reintentar (F04).
     const user = window.currentUser;
     const name = user ? user.name : 'Staff';
     const takingId = String(window._takingId || '');
@@ -2607,8 +2751,10 @@
       }
     }
 
-    // ── TICKET MULTI: usar endpoint específico ────────────────
+    // ── TICKET MULTI: usar endpoint específico (legacy/TM — cierre temprano
+    //    conservado, sin más cambios que la ubicación del closeModal) ──────
     if (takingId.startsWith('TM-')) {
+      closeModal();
       try {
         const result = await LineaService.tomarAreaTicket({
           idEspera:    takingId,
@@ -2626,7 +2772,64 @@
       window._takingSecuencia = window._takingData ? (window._takingData.secuencia || []) : [];
       window._takingPromasExtra = [];
     } else {
-    // ── FLUJO NORMAL / SN / SP / LE ──────────────────────────
+    // ── Fase 0 corrección — Parte 4/5: selector nativo de subtickets activo ──
+    if (window._takingSubticketActivo) {
+      const _grupoId = window._takingSubticketTicketRef || takingId;
+      // Identidad SIEMPRE desde el mapa real (helper compartido) — NUNCA
+      // reconstruida desde el DOM ni por nombre/índice.
+      const _mapaComp = (window._subticketComponentes && window._subticketComponentes[_grupoId]) || {};
+      const componentesSeleccionados = obtenerSeleccionSubtickets_(_grupoId, _mapaComp);
+      const _valSel = validarSeleccionSubtickets_(componentesSeleccionados);
+      if (!_valSel.ok) {
+        // Selección vacía o inconsistente: no se envía nada (H7). El botón ya
+        // nace deshabilitado en 0, esto es un respaldo defensivo. Modal
+        // permanece abierto — el usuario no llegó a intentar nada todavía.
+        alert('Selecciona al menos un servicio para continuar.');
+        return;
+      }
+      let result;
+      try {
+        result = await apiPost('tomarClienta', {
+          idListaEspera: window._takingId,
+          chicaNombre: name,
+          componentesSeleccionados: componentesSeleccionados
+        });
+      } catch (err) {
+        // Error de red (F04): modal permanece abierto, checkbox sigue
+        // marcado (no se tocó window._subticketSeleccion), botón se
+        // rehabilita solo porque nunca se deshabilitó fuera del propio DOM
+        // — el usuario puede reintentar tocando "Iniciar seleccionados" de nuevo.
+        console.error('Error al tomar clienta (subtickets):', err);
+        alert('Error al tomar la clienta. Intentá de nuevo.');
+        return;
+      }
+      // Fase 0.1 corrección Parte A — CLASIFICACIÓN CERRADA: solo
+      // result.success === true puede continuar (limpiar selección, cerrar
+      // modal, notificar éxito, ejecutar loadClientAfterTake). Cualquier otro
+      // caso (success:false, sin success, null, error de red ya manejado
+      // arriba) muestra el error y NO continúa — sin excepciones que dejen
+      // pasar un success:false (F01/F02).
+      if (!result || result.success !== true) {
+        const msg = (result && (result.message || result.error))
+          || 'No se pudo iniciar el servicio.';
+        alert(msg);
+        return; // modal permanece abierto, selección intacta
+      }
+      // ── Éxito real confirmado — recién ahora: cerrar modal, notificar,
+      //    limpiar selección local y marcar qué ids quedaron confirmados
+      //    (Parte C: para que loadClientAfterTake filtre el slot operativo). ──
+      closeModal();
+      simulateNotif('mikaela', name + ' tomó ' + componentesSeleccionados.length
+        + ' servicio' + (componentesSeleccionados.length > 1 ? 's' : '')
+        + ' de ' + (window._takingClientCode || 'una clienta'), 'Lista de espera · ahora', false);
+      window._takingSubticketIdsConfirmados = componentesSeleccionados.map(function (c) { return String(c.id); });
+      if (window._subticketSeleccion) delete window._subticketSeleccion[_grupoId];
+      if (window._subticketComponentes) delete window._subticketComponentes[_grupoId];
+      window._takingSubticketActivo = false;
+    } else {
+    // ── FLUJO NORMAL / SN / SP / LE (legacy, EXACTO, sin cambios de lógica —
+    //    solo se movió closeModal() a esta rama, sin alterar su comportamiento) ──
+    closeModal();
     try {
       const result = await apiPost('tomarClienta', {
         idListaEspera: window._takingId,
@@ -2643,8 +2846,10 @@
       alert('Error al tomar la clienta. Intentá de nuevo.');
       return;
     }
+    } // ── fin else nativo-con-selector / legacy ────────────────────────────
     
     // Guardar la promo disponible (si existe) pero NO aplicarla automáticamente
+    // — compartido por AMBAS ramas (nativo con selector y legacy).
     const takingData = window._takingData;
     const clientKey = normalizeClientKey(window._takingClient || '');
 
@@ -2837,23 +3042,31 @@
                 servicioNombre = parsed.nombre || parsed.name || servicioNombre;
               } catch(e2) { servicioNombre = 'Servicio'; }
             }
-            slotServices[1].push({
-              name: servicioNombre,
-              price: servicioPrecio,
-              area: a.area
-            });
-            // Si tiene serviciosDetalle (mismo área combinado), cargar todos
-            if (a.serviciosDetalle && a.serviciosDetalle.length > 1) {
-              slotServices[1] = a.serviciosDetalle.map(sd => ({
+
+            // Fase 0.3 corrección — PRECEDENCIA ABSOLUTA del desglose: el
+            // helper corre siempre que haya AL MENOS UNA fila (no solo >1).
+            // Si es moderno, su resultado domina por completo — nunca se
+            // agrega antes ni se cae después al agregado a.servicio, ni
+            // siquiera con una sola línea. El agregado SOLO se usa cuando
+            // no existe serviciosDetalle en absoluto.
+            const _detalles1 = Array.isArray(a.serviciosDetalle) ? a.serviciosDetalle : [];
+            if (_detalles1.length > 0) {
+              const _r1 = _serviciosDetalleActivosParaStaff_(_detalles1, user ? user.name : '');
+              slotServices[1] = _r1.lista.map(sd => ({
                 name: sd.servicio || sd.nombre || sd.name || '',
                 price: Number(sd.monto || sd.precio || sd.price || 0),
                 area: a.area, status: undefined
               }));
+              if (_r1.esModerno && _r1.lista.length === 0) {
+                console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (loadClientAfterTake slot1)', a.idEspera);
+              }
               const totalCombinado = slotServices[1].reduce((s, v) => s + Number(v.price), 0);
               renderServicesForSlot(1);
               document.getElementById('as1Total').textContent = '$' + totalCombinado;
               document.getElementById('as1SvcCount').textContent = String(slotServices[1].length);
             } else {
+              // Sin desglose en absoluto → agregado permitido (comportamiento anterior).
+              slotServices[1] = [{ name: servicioNombre, price: servicioPrecio, area: a.area }];
               renderServicesForSlot(1);
               document.getElementById('as1Total').textContent = '$' + servicioPrecio;
               document.getElementById('as1SvcCount').textContent = '1';
@@ -2891,33 +3104,73 @@
                 console.log('completedAreas parse:', _obsAllFields.substring(0, 100), '->', restoredCompletedAreas);
               } catch(eComp) { console.warn('completedAreas parse error:', eComp); }
 
-              // Para SP de enganche: usar a.precioMiArea (monto de esta área específica)
-              // Para promo compartida: excluir completedAreas → la 2da staff ve solo su parte
-              const precioMiAreaSP = Number(a.precioMiArea || 0);
-              // El precioMiArea horneado puede traer el del ÁREA PRIORITARIA (la más cara, p.ej.
-              // pestañas), no la de ESTA staff. En promos multi-área SIEMPRE calculamos desde MI área.
-              const _esMultiArea = (promoFull.division || []).length > 1;
-              const myPrice = (!_esMultiArea && precioMiAreaSP > 0)
-                ? precioMiAreaSP
-                : getMyPromoPrice(promoFull, myArea, restoredCompletedAreas);
-              
-              slotServices[1].push({
-                name: promoFull.name,
-                area: myArea,
-                price: myPrice
-              });
-              
-              // Actualizar UI
-              renderServicesForSlot(1);
-              document.getElementById('as1Total').textContent = '$' + myPrice;
-              document.getElementById('as1SvcCount').textContent = '1';
+              // Fase 0.4 corrección Parte A — calcular UNA sola vez, ANTES de
+              // separar el tratamiento moderno/legacy del slot operativo.
+              const _detallesP1 = Array.isArray(a.serviciosDetalle) ? a.serviciosDetalle : [];
+              const _restauradoP1 = _detallesP1.length > 0
+                ? _serviciosDetalleActivosParaStaff_(_detallesP1, user ? user.name : '')
+                : null;
 
-              // Fix 2: partes previas (promo compartida) — mostrar como historial readonly
+              if (_restauradoP1 && _restauradoP1.esModerno) {
+                // MODERNO domina el slot operativo por completo: NO se agrega
+                // promoFull.name, NO se usa getMyPromoPrice, NO se agrega
+                // a.servicio. Puede quedar vacío. La metadata de promo
+                // (assignedPromo/activePromos/banners, más abajo) sí puede
+                // seguir registrándose — no afecta el contenido del slot.
+                slotServices[1] = _restauradoP1.lista.map(function(sd){ return {
+                  name: sd.servicio || sd.nombre || sd.name || '',
+                  price: Number(sd.monto || sd.precio || sd.price || 0),
+                  area: sd.area || myArea, status: undefined
+                }; });
+                const _totalModerno1 = slotServices[1].reduce(function(s,v){ return s + Number(v.price||0); }, 0);
+                renderServicesForSlot(1);
+                document.getElementById('as1Total').textContent = '$' + _totalModerno1;
+                document.getElementById('as1SvcCount').textContent = String(slotServices[1].length);
+                if (_restauradoP1.lista.length === 0) {
+                  console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (loadClientAfterTake slot1, promo)', a.idEspera);
+                }
+              } else {
+                // Legacy / agregado — comportamiento anterior EXACTO, sin cambios.
+                // Para SP de enganche: usar a.precioMiArea (monto de esta área específica)
+                // Para promo compartida: excluir completedAreas → la 2da staff ve solo su parte
+                const precioMiAreaSP = Number(a.precioMiArea || 0);
+                // El precioMiArea horneado puede traer el del ÁREA PRIORITARIA (la más cara, p.ej.
+                // pestañas), no la de ESTA staff. En promos multi-área SIEMPRE calculamos desde MI área.
+                const _esMultiArea = (promoFull.division || []).length > 1;
+                const myPrice = (!_esMultiArea && precioMiAreaSP > 0)
+                  ? precioMiAreaSP
+                  : getMyPromoPrice(promoFull, myArea, restoredCompletedAreas);
+
+                slotServices[1].push({
+                  name: promoFull.name,
+                  area: myArea,
+                  price: myPrice
+                });
+
+                // Actualizar UI
+                renderServicesForSlot(1);
+                document.getElementById('as1Total').textContent = '$' + myPrice;
+                document.getElementById('as1SvcCount').textContent = '1';
+              }
+
+              // Fix 2: partes previas (promo compartida) — mostrar como historial readonly.
+              // Fase 0.4 corrección Parte B — en formato MODERNO, solo estados
+              // realmente completados/cobrados (completado/por_verificar/cobrado).
+              // NUNCA en_servicio, NUNCA esperando, y nunca un componente activo
+              // de esta misma staff (ya está representado en el slot operativo
+              // de arriba, no como "historial"). En legacy sin estado, se
+              // conserva el comportamiento anterior tal cual.
               if (a.serviciosDetalle && a.serviciosDetalle.length > 0) {
                 window._desgloseAcumulado = a.serviciosDetalle;
                 const svcListEl = document.getElementById('as1ServicesList');
                 if (svcListEl) {
-                  const histHtml = a.serviciosDetalle.map(function(d) {
+                  const _paraHistorial1 = (_restauradoP1 && _restauradoP1.esModerno)
+                    ? a.serviciosDetalle.filter(function (d) {
+                        const _e = String(d.estado || '').toLowerCase().trim();
+                        return _e === 'completado' || _e === 'por_verificar' || _e === 'cobrado';
+                      })
+                    : a.serviciosDetalle;
+                  const histHtml = _paraHistorial1.map(function(d) {
                     return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--success-bg);border-radius:12px;margin-bottom:8px;">'
                       + '<span style="font-size:16px;">&#x2705;</span>'
                       + '<div style="flex:1;"><div style="font-size:12px;font-weight:700;color:var(--success);">'
@@ -3107,9 +3360,14 @@
             // del catálogo PROMOS del front, p.ej. clienta piloto LINEAS) → cargar el
             // servicio directo desde la atención para que el modal no muestre "—".
             if ((!slotServices[1] || slotServices[1].length === 0) && a.servicio && a.servicio !== '—') {
-              const _det1fb = Array.isArray(a.serviciosDetalle) ? a.serviciosDetalle : [];
-              if (_det1fb.length > 0) {
-                slotServices[1] = _det1fb.map(sd => ({
+              const _r2 = _serviciosDetalleActivosParaStaff_(a.serviciosDetalle, user ? user.name : '');
+              if (_r2.esModerno && _r2.lista.length === 0) {
+                // Parte C: NO caer al agregado a.servicio — desglose moderno
+                // sin componentes en_servicio para esta staff = slot vacío.
+                console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (fallback slot1)', a.idEspera);
+                slotServices[1] = [];
+              } else if (_r2.lista.length > 0) {
+                slotServices[1] = _r2.lista.map(sd => ({
                   name: sd.servicio || sd.nombre || sd.name || '',
                   price: Number(sd.monto || sd.precio || sd.price || 0),
                   area: sd.area || a.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true
@@ -3176,23 +3434,28 @@
             if (_svcNom2.trim().startsWith('{')) {
               try { const p2 = JSON.parse(_svcNom2); _svcNom2 = p2.nombre || p2.name || _svcNom2; } catch(e) {}
             }
-            slotServices[2].push({
-              name: _svcNom2,
-              price: price,
-              area: a.area
-            });
-            // Si tiene serviciosDetalle (mismo área combinado), cargar todos
-            if (a.serviciosDetalle && a.serviciosDetalle.length > 1) {
-              slotServices[2] = a.serviciosDetalle.map(sd => ({
+
+            // Fase 0.3 corrección — mismo tratamiento que slot1: el helper
+            // corre siempre que haya AL MENOS UNA fila de desglose; si es
+            // moderno, domina por completo (nunca se agrega antes ni se cae
+            // después al agregado). El agregado solo se usa sin desglose.
+            const _detalles3 = Array.isArray(a.serviciosDetalle) ? a.serviciosDetalle : [];
+            if (_detalles3.length > 0) {
+              const _r3 = _serviciosDetalleActivosParaStaff_(_detalles3, user ? user.name : '');
+              slotServices[2] = _r3.lista.map(sd => ({
                 name: sd.servicio || sd.nombre || sd.name || '',
                 price: Number(sd.monto || sd.precio || sd.price || 0),
                 area: a.area, status: undefined
               }));
+              if (_r3.esModerno && _r3.lista.length === 0) {
+                console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (loadClientAfterTake slot2)', a.idEspera);
+              }
               const totalCombinado2 = slotServices[2].reduce((s, v) => s + Number(v.price), 0);
               renderServicesForSlot(2);
               document.getElementById('as2Total').textContent = '$' + totalCombinado2;
               document.getElementById('as2SvcCount').textContent = String(slotServices[2].length);
             } else {
+              slotServices[2] = [{ name: _svcNom2, price: price, area: a.area }];
               renderServicesForSlot(2);
               document.getElementById('as2Total').textContent = '$' + price;
               document.getElementById('as2SvcCount').textContent = '1';
@@ -3229,31 +3492,63 @@
                 if (_matchComp2) restoredCompletedAreas2 = JSON.parse(_matchComp2[1]);
               } catch(eComp2) { console.warn('completedAreas parse error (slot2):', eComp2); }
 
-              // Para SP de enganche: usar a.precioMiArea (monto de esta área específica)
-              // Para promo compartida: excluir completedAreas → la 2da staff ve solo su parte
-              const precioMiAreaSP2 = Number(a.precioMiArea || 0);
-              const _esMultiArea2 = (promoFull.division || []).length > 1;
-              const myPrice2 = (!_esMultiArea2 && precioMiAreaSP2 > 0)
-                ? precioMiAreaSP2
-                : getMyPromoPrice(promoFull, myArea2, restoredCompletedAreas2);
+              // Fase 0.4 corrección Parte A — calcular UNA sola vez, ANTES de
+              // separar el tratamiento moderno/legacy del slot operativo.
+              const _detallesP2 = Array.isArray(a.serviciosDetalle) ? a.serviciosDetalle : [];
+              const _restauradoP2 = _detallesP2.length > 0
+                ? _serviciosDetalleActivosParaStaff_(_detallesP2, user ? user.name : '')
+                : null;
 
-              slotServices[2].push({
-                name: promoFull.name,
-                area: myArea2,
-                price: myPrice2
-              });
+              if (_restauradoP2 && _restauradoP2.esModerno) {
+                // MODERNO domina el slot operativo por completo (simétrico a slot1).
+                slotServices[2] = _restauradoP2.lista.map(function(sd){ return {
+                  name: sd.servicio || sd.nombre || sd.name || '',
+                  price: Number(sd.monto || sd.precio || sd.price || 0),
+                  area: sd.area || myArea2, status: undefined
+                }; });
+                const _totalModerno2 = slotServices[2].reduce(function(s,v){ return s + Number(v.price||0); }, 0);
+                renderServicesForSlot(2);
+                document.getElementById('as2Total').textContent = '$' + _totalModerno2;
+                document.getElementById('as2SvcCount').textContent = String(slotServices[2].length);
+                if (_restauradoP2.lista.length === 0) {
+                  console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (loadClientAfterTake slot2, promo)', a.idEspera);
+                }
+              } else {
+                // Legacy / agregado — comportamiento anterior EXACTO, sin cambios.
+                // Para SP de enganche: usar a.precioMiArea (monto de esta área específica)
+                // Para promo compartida: excluir completedAreas → la 2da staff ve solo su parte
+                const precioMiAreaSP2 = Number(a.precioMiArea || 0);
+                const _esMultiArea2 = (promoFull.division || []).length > 1;
+                const myPrice2 = (!_esMultiArea2 && precioMiAreaSP2 > 0)
+                  ? precioMiAreaSP2
+                  : getMyPromoPrice(promoFull, myArea2, restoredCompletedAreas2);
 
-              // Actualizar UI
-              renderServicesForSlot(2);
-              document.getElementById('as2Total').textContent = '$' + myPrice2;
-              document.getElementById('as2SvcCount').textContent = '1';
+                slotServices[2].push({
+                  name: promoFull.name,
+                  area: myArea2,
+                  price: myPrice2
+                });
 
-              // partes previas (promo compartida) — mostrar como historial readonly
+                // Actualizar UI
+                renderServicesForSlot(2);
+                document.getElementById('as2Total').textContent = '$' + myPrice2;
+                document.getElementById('as2SvcCount').textContent = '1';
+              }
+
+              // partes previas (promo compartida) — mostrar como historial readonly.
+              // Fase 0.4 corrección Parte B — mismo filtro que slot1: en
+              // MODERNO solo completado/por_verificar/cobrado; legacy intacto.
               if (a.serviciosDetalle && a.serviciosDetalle.length > 0) {
                 window._desgloseAcumulado = a.serviciosDetalle;
                 const svcListEl2 = document.getElementById('as2ServicesList');
                 if (svcListEl2) {
-                  const histHtml2 = a.serviciosDetalle.map(function(d) {
+                  const _paraHistorial2 = (_restauradoP2 && _restauradoP2.esModerno)
+                    ? a.serviciosDetalle.filter(function (d) {
+                        const _e = String(d.estado || '').toLowerCase().trim();
+                        return _e === 'completado' || _e === 'por_verificar' || _e === 'cobrado';
+                      })
+                    : a.serviciosDetalle;
+                  const histHtml2 = _paraHistorial2.map(function(d) {
                     return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--success-bg);border-radius:12px;margin-bottom:8px;">'
                       + '<span style="font-size:16px;">&#x2705;</span>'
                       + '<div style="flex:1;"><div style="font-size:12px;font-weight:700;color:var(--success);">'
@@ -3420,9 +3715,12 @@
             // front (p.ej. la clienta piloto de LINEAS)— cargar el servicio directo
             // desde la atención para que el modal "Servicio asignado" no muestre "—".
             if ((!slotServices[2] || slotServices[2].length === 0) && a.servicio && a.servicio !== '—') {
-              const _det2 = Array.isArray(a.serviciosDetalle) ? a.serviciosDetalle : [];
-              if (_det2.length > 0) {
-                slotServices[2] = _det2.map(sd => ({
+              const _r4 = _serviciosDetalleActivosParaStaff_(a.serviciosDetalle, user ? user.name : '');
+              if (_r4.esModerno && _r4.lista.length === 0) {
+                console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (fallback slot2)', a.idEspera);
+                slotServices[2] = [];
+              } else if (_r4.lista.length > 0) {
+                slotServices[2] = _r4.lista.map(sd => ({
                   name: sd.servicio || sd.nombre || sd.name || '',
                   price: Number(sd.monto || sd.precio || sd.price || 0),
                   area: sd.area || a.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true
