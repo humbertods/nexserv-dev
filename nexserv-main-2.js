@@ -3829,8 +3829,14 @@
               // Ticket madre con varios subtickets → listar cada servicio en su
               // renglón (antes se concatenaban en una sola línea: "A + B + C + D").
               const _subticketsHTML = (a.serviciosDetalle && a.serviciosDetalle.length > 1)
-                ? a.serviciosDetalle.map(d => `<div style="font-size:11px;color:var(--ink-soft);">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong></div>`).join('')
-                : `<div style="font-size:11px;color:var(--ink-soft);">${servicioLimpio}</div>`;
+                ? a.serviciosDetalle.map(d => {
+                    const _detEnCurso = String(d.estado || '').toLowerCase() === 'en_servicio';
+                    const _badgeDet = _detEnCurso
+                      ? ' <span style=\"font-size:9px;font-weight:700;background:var(--info-bg);color:var(--info);padding:2px 6px;border-radius:100px;\">EN CURSO</span>'
+                      : '';
+                    return `<div style=\"font-size:11px;color:var(--ink-soft);\">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong>${_badgeDet}</div>`;
+                  }).join('')
+                : `<div style=\"font-size:11px;color:var(--ink-soft);\">${servicioLimpio}</div>`;
               timelineHTML += `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;">
                 <div style="width:28px;height:28px;border-radius:50%;background:${badgeBg};border:2px solid ${badgeColor};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;animation:pulse 2s infinite;">${iconActual}</div>
                 <div style="flex:1;"><div style="font-size:12px;font-weight:800;color:${badgeColor};">${labelActual} · ${a.tomadaPor}</div>
