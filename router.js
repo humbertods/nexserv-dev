@@ -28,21 +28,24 @@
       }, 12000);
     }
     if (id === 'staffHome') {
-      loadStaffHome();
+      await loadStaffHome();
       // Auto-refresco del panel de la chica MIENTRAS lo tiene abierto (primer plano).
       // Así la clienta recién asignada aparece sola en pocos segundos, sin depender del push.
       // Se pausa solo si: no es la pantalla activa, la app está en segundo plano, hay un
-      // modal abierto, o ya hay una carga en curso (evita solapar llamadas).
+      // modal abierto, o ya hay un refresco en curso (evita solapar llamadas).
+      // FASE 1 ACOTADA (DEV) Parte C — el intervalo ejecuta refrescarAsignacionesStaff()
+      // (liviano: solo "Por empezar" + contadores) en vez de loadStaffHome() completo,
+      // y baja de 10000ms a 4000ms. La primera entrada al panel sigue usando
+      // loadStaffHome() completo, arriba.
       if (window._staffHomeRefresh) clearInterval(window._staffHomeRefresh);
       window._staffHomeRefresh = setInterval(async () => {
         const el = document.getElementById('staffHome');
         if (!el || !el.classList.contains('active')) {
           clearInterval(window._staffHomeRefresh); window._staffHomeRefresh = null; return;
         }
-        if (document.hidden || document.querySelector('.modal-bg.active') || window._staffHomeLoading) return;
-        window._staffHomeLoading = true;
-        try { await loadStaffHome(); } finally { window._staffHomeLoading = false; }
-      }, 10000);
+        if (document.hidden || document.querySelector('.modal-bg.active') || window._staffHomeLoading || window._staffAssignmentsRefreshPromise) return;
+        try { await refrescarAsignacionesStaff(); } catch (e) { console.warn('[staffHomeRefresh]', e); }
+      }, 4000);
     } else if (window._staffHomeRefresh) {
       clearInterval(window._staffHomeRefresh); window._staffHomeRefresh = null;
     }
