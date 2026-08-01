@@ -137,6 +137,31 @@
     if (typeof show === 'function') show('login');
   }
 
+  // ── FASE 1 ACOTADA (DEV) Parte G — instrumentación temporal de tiempos ──
+  // Gateada por ENV==='dev' (ya existente, línea ~14). Solo para las 4
+  // acciones pedidas. Nunca registra password/token/session/payload/nombres/
+  // teléfonos/observaciones — solo metadatos de tiempo y resultado.
+  const _NX_LOG_ACTIONS_ = ['tomarClienta', 'getTableroLineas', 'getAtenciones', 'getServiciosHoy'];
+  function _nxLogStart_(action, method, attempt, timeoutMs) {
+    if (ENV !== 'dev' || _NX_LOG_ACTIONS_.indexOf(action) === -1) return;
+    console.info('[NX-API-START]', { action, method, attempt, timeoutMs: timeoutMs || null, startedAt: Date.now() });
+  }
+  function _nxLogEnd_(action, method, attempt, startedAt, status, ok) {
+    if (ENV !== 'dev' || _NX_LOG_ACTIONS_.indexOf(action) === -1) return;
+    console.info('[NX-API-END]', { action, method, attempt, elapsedMs: Date.now() - startedAt, status, ok });
+  }
+  function _nxLogFail_(action, method, attempt, startedAt, status, err, aborted) {
+    if (ENV !== 'dev' || _NX_LOG_ACTIONS_.indexOf(action) === -1) return;
+    console.warn('[NX-API-FAIL]', {
+      action, method, attempt,
+      elapsedMs: Date.now() - startedAt,
+      status: status || 0,
+      errorName: err && err.name,
+      errorMessage: err && err.message,
+      aborted: !!aborted
+    });
+  }
+
   async function apiGet(action, params) {
     const url = new URL(API_URL);
     url.searchParams.set('action', action);
@@ -145,17 +170,23 @@
     if (window._session) url.searchParams.set('session', window._session);
     if (window.currentUser && window.currentUser.name) url.searchParams.set('_who', window.currentUser.name); // pista de diagnóstico (NO autentica): identifica a la chica en el ApiLog aunque falte la sesión
     if (params) Object.keys(params).forEach(k => url.searchParams.set(k, params[k]));
+    const _t0 = Date.now();
+    let _status = 0;
+    _nxLogStart_(action, 'GET', 0, null);
     try {
       const res = await fetch(url.toString(), {
         method: 'GET',
         redirect: 'follow'
       });
+      _status = res.status;
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       }
       const data = await res.json();
+      _nxLogEnd_(action, 'GET', 0, _t0, _status, true);
       return _interceptAuth(data, action);
     } catch (err) {
+      _nxLogFail_(action, 'GET', 0, _t0, _status, err, err && err.name === 'AbortError');
       console.error('API Error:', err);
       return { error: err.message };
     }
@@ -171,6 +202,9 @@
     for (let attempt = 0; attempt <= retries; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const _t0 = Date.now();
+      let _status = 0;
+      _nxLogStart_(action, 'POST', attempt, timeoutMs);
       try {
         const res = await fetch(API_URL, {
           method: 'POST',
@@ -180,11 +214,14 @@
           body: JSON.stringify(data)
         });
         clearTimeout(timer);
+        _status = res.status;
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         const result = await res.json();
+        _nxLogEnd_(action, 'POST', attempt, _t0, _status, true);
         return _interceptAuth(result, action);
       } catch (err) {
         clearTimeout(timer);
+        _nxLogFail_(action, 'POST', attempt, _t0, _status, err, err && err.name === 'AbortError');
         console.warn(`API intento ${attempt + 1} fallido (${action}):`, err.message);
         if (attempt < retries) {
           await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
@@ -544,9 +581,13 @@
       const el = document.getElementById('staffHome');
       if (!el || !el.classList.contains('active')) return;
       if (document.hidden || document.querySelector('.modal-bg.active') || window._staffHomeLoading) return;
-      if (typeof loadStaffHome !== 'function') return;
-      window._staffHomeLoading = true;
-      Promise.resolve(loadStaffHome()).finally(() => { window._staffHomeLoading = false; });
+      // FASE 1 ACOTADA (DEV) Parte D — refresco liviano (solo "Por empezar" +
+      // contadores) en vez de loadStaffHome() completo. refrescarAsignacionesStaff
+      // comparte window._staffAssignmentsRefreshPromise, así que si 'focus' y
+      // 'visibilitychange' disparan casi juntos, no generan dos requests: el
+      // segundo llamado reutiliza la misma promesa en curso.
+      if (typeof refrescarAsignacionesStaff !== 'function') return;
+      refrescarAsignacionesStaff();
     }
     // Modo de descanso: revisar al volver la app al frente, al enfocar, por actividad y cada 25s
     document.addEventListener('visibilitychange', () => {
