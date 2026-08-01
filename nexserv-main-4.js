@@ -1975,7 +1975,20 @@
     document.getElementById('addSvcPriceDisplay').style.display = 'block';
   }
 
+  // ── GUARD DE DOBLE SUBMIT ────────────────────────────────────────────────────
+  // Mismo patrón que confirmTake()/confirmTake_() en nexserv-main-1.js: sin esto,
+  // un doble toque (o un toque mientras la red está lenta) puede disparar dos
+  // 'solicitarAutorizacion' para el mismo extra. El cuerpo real vive en
+  // confirmAddService_(); acá solo se serializa la entrada. index.html no
+  // cambia — el botón sigue llamando confirmAddService().
   async function confirmAddService() {
+    if (window._confirmAddServiceEnCurso) { console.warn('[confirmAddService] ignorado: ya hay un envío en curso'); return; }
+    window._confirmAddServiceEnCurso = true;
+    try { return await confirmAddService_(); }
+    finally { window._confirmAddServiceEnCurso = false; }
+  }
+
+  async function confirmAddService_() {
     const val = document.getElementById('addSvcService').value;
     if (!val) { alert('Seleccioná un servicio'); return; }
     
@@ -2028,9 +2041,28 @@
       if (addServiceToSlot(slot, svc)) {
         document.getElementById('addSvcNote').value = '';
         closeModal();
-        await sendAuthorizationRequest(clientName, svc, slot);
-        recargarAutorizacionesStaff(slot);
-        alert('⏳ Solicitud enviada a Mikaela. El servicio estará pendiente hasta que ella lo apruebe.');
+        const _authResult = await sendAuthorizationRequest(clientName, svc, slot);
+        if (_authResult && _authResult.success === true) {
+          // Solo acá está confirmado que el backend realmente creó la
+          // autorización — recién ahora se declara éxito.
+          recargarAutorizacionesStaff(slot);
+          alert('⏳ Solicitud enviada a Mikaela. El servicio estará pendiente hasta que ella lo apruebe.');
+        } else {
+          // CORRECCIÓN — antes acá se declaraba éxito sin importar el
+          // resultado real. Ahora: revertir la inserción visual (no queda
+          // "pendiente autorización" huérfano localmente), restaurar
+          // totales/contador del slot, y mostrar el error real del backend.
+          const _idxRevertir = (slotServices[slot] || []).indexOf(svc);
+          if (_idxRevertir !== -1) slotServices[slot].splice(_idxRevertir, 1);
+          renderServicesForSlot(slot);
+          const _totalRevertido = (slotServices[slot] || []).reduce((s, v) => s + (v.status !== 'rechazado' && v.status !== 'pendiente' ? Number(v.price || 0) : 0), 0);
+          const _totEl = document.getElementById('as' + slot + 'Total');
+          if (_totEl) _totEl.textContent = '$' + _totalRevertido;
+          const _cntEl = document.getElementById('as' + slot + 'SvcCount');
+          if (_cntEl) _cntEl.textContent = String((slotServices[slot] || []).filter(s => s.status !== 'rechazado').length);
+          const _msgError = (_authResult && _authResult.message) || 'No se pudo enviar la solicitud.';
+          alert('❌ No se pudo enviar la solicitud a Mikaela: ' + _msgError + '\n\nEl servicio extra NO quedó registrado. Intentá de nuevo.');
+        }
       }
       return;
     }
@@ -2043,7 +2075,16 @@
   async function sendAuthorizationRequest(clientName, service, slot) {
     const user = window.currentUser;
     const clientCode = slot === 1 ? window._as1Client : window._as2Client;
-    
+
+    // CORRECCIÓN — mismo patrón ya usado en los otros 14 lugares del proyecto
+    // que dependen de window._as1IdEspera/_as2IdEspera (ver ensureIdEsperaFresco
+    // en nexserv-main-1.js): si el ticket lleva rato abierto, el id en memoria
+    // puede haber quedado viejo o vacío. Se re-resuelve desde getAtenciones
+    // (match por código de ESTA clienta, nunca por posición salvo fallback)
+    // ANTES de leer la variable — sendAuthorizationRequest era el único flujo
+    // dependiente del slot que no lo hacía.
+    await ensureIdEsperaFresco(slot);
+
     console.log('📤 sendAuthorizationRequest called:', {
       clientName,
       clientCode,
@@ -2068,7 +2109,10 @@
       if (!_idEsperaSlot) {
         console.error('[sendAuthorizationRequest] ticketRef vacío — no se puede enviar la solicitud sin ticket real (slot ' + slot + ')');
         alert('No se pudo identificar el ticket de esta clienta. No se envió la solicitud de servicio extra — avisá a Mikaela.');
-        return;
+        // CORRECCIÓN — antes esta función no devolvía nada; el caller
+        // (confirmAddService) no tenía forma de saber que la solicitud
+        // nunca se envió y declaraba éxito igual.
+        return { success: false, message: 'No se pudo identificar el ticket de esta clienta.' };
       }
 
       const _esSP = _idEsperaSlot.startsWith('SP-');
@@ -2113,11 +2157,14 @@
           enviarPushStaff(['Mikaela'], '✋ Servicio extra para aprobar',
             _staff + ' → ' + (clientName || 'clienta') + ': ' + (service.name || 'servicio') + _precio);
         } catch (ePush) { console.warn('[Push] aviso de autorización a Mikaela falló:', ePush); }
+        return { success: true, authId: result.authId };
       } else {
         console.error('❌ Error al enviar autorización:', result.message);
+        return { success: false, message: result.message || result.error || 'No se pudo enviar la solicitud de autorización.' };
       }
     } catch (err) {
       console.error('❌ Exception al enviar autorización:', err);
+      return { success: false, message: 'Error de conexión al enviar la solicitud.' };
     }
   }
 
