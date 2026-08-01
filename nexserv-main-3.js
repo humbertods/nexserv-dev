@@ -1834,7 +1834,19 @@
           _payloadGrupal.promoNombre    = c.promoNombre || '';
           _payloadGrupal.esCobroGrupal  = true;
           _payloadGrupal.clienteCodigo  = c.codigo || '';   // para el gate del piloto LINEAS
-          await apiPost('confirmarCobro', _payloadGrupal);
+          // FIX (éxito visual falso, mismo patrón que el cobro individual): antes
+          // no se leía la respuesta de este ticket del grupo — un {success:false}
+          // (ej. TICKET_COMPONENTES_PENDIENTES) pasaba de largo y el grupo entero
+          // terminaba mostrando "confirmado". NOTA de atomicidad (no resuelta
+          // todavía, documentada según lo pedido): los tickets ANTERIORES a este
+          // en el bucle ya quedaron cobrados en el backend antes de detectar el
+          // fallo — no hay rollback de esos. Lo que sí se garantiza acá es que
+          // nunca se muestra éxito ni se registran productos si ESTE ticket falló.
+          const _resultGrupalC = await apiPost('confirmarCobro', _payloadGrupal);
+          if (!_resultGrupalC || _resultGrupalC.success !== true) {
+            throw new Error('Cobro de ' + (c.nombre || c.codigo || 'una clienta') + ' falló: ' +
+              ((_resultGrupalC && (_resultGrupalC.message || _resultGrupalC.error)) || 'sin respuesta del servidor'));
+          }
           // ── MANDAMIENTO #3: registrar los productos de ESTA clienta por separado
           // (van a la caja, SIN comisión), igual que en el cobro individual.
           const _prodsC = (c.idEspera && window._apProductosEnTicket && window._apProductosEnTicket[c.idEspera]) ? window._apProductosEnTicket[c.idEspera] : [];
@@ -1934,7 +1946,14 @@
 
     try {
       if (!window._cobrarId) throw new Error('ID de ticket vacío — no se puede confirmar cobro');
-      await apiPost('confirmarCobro', _payloadM5);
+      // FIX (éxito visual falso): antes no se leía la respuesta — un
+      // {success:false,...} del backend (ej. TICKET_COMPONENTES_PENDIENTES,
+      // TICKET_SOURCE_MISMATCH) pasaba de largo el catch (no es una excepción,
+      // es una respuesta 200 resuelta) y el modal seguía como si hubiera cobrado.
+      const _resultCobro = await apiPost('confirmarCobro', _payloadM5);
+      if (!_resultCobro || _resultCobro.success !== true) {
+        throw new Error((_resultCobro && (_resultCobro.message || _resultCobro.error)) || 'el servidor no confirmó el cobro');
+      }
     } catch (err) {
       console.error('confirmarCobro error:', err);
       btn.disabled = false;
@@ -4077,4 +4096,3 @@
 
   let currentProfileClient = null;
   let currentProfileTab = 'cejas';
-
