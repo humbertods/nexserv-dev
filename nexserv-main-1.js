@@ -2619,8 +2619,25 @@
     // serviciosDetalle (aunque sea una sola línea real, ej. SN con nombre
     // compuesto "Depilación + Brow lamination"), nunca se divide por texto:
     // el nombre no participa en la decisión de subtickets.
+    //
+    // CORRECCIÓN (caso C-0805) — el área 'depilacion' ahora es un requisito
+    // OBLIGATORIO (&&), no una alternativa más del OR. Antes, un Servicio
+    // Normal de OTRA área (ej. cejas) con un nombre histórico compuesto que
+    // solo CONTUVIERA la subcadena "depi"/"bikini"/"pierna"/"axila" — como
+    // "Depilación + pigmento" — entraba igual a esta rama, se partía por "+",
+    // se reconstruía buscando cada parte SOLO en CATALOGO.depilacion (nunca
+    // en el catálogo real del área), y se ignoraba w.total. Con el área como
+    // requisito, un ticket de cejas nunca entra acá, sin importar su nombre.
     const _tieneDetalleReal = _detalleTake.length > 0;
-    const esDepi = !_tieneDetalleReal && (w.area === 'depilacion' || servicioStr0.toLowerCase().includes('depi') || servicioStr0.toLowerCase().includes('bikini') || servicioStr0.toLowerCase().includes('pierna') || servicioStr0.toLowerCase().includes('axila'));
+    const esDepi =
+      !_tieneDetalleReal &&
+      String(w.area || '').trim().toLowerCase() === 'depilacion' &&
+      (
+        servicioStr0.toLowerCase().includes('depi') ||
+        servicioStr0.toLowerCase().includes('bikini') ||
+        servicioStr0.toLowerCase().includes('pierna') ||
+        servicioStr0.toLowerCase().includes('axila')
+      );
 
     if (esDepi) {
       let servicioRaw3 = servicioStr0;
