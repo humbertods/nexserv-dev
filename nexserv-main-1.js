@@ -2523,7 +2523,7 @@
     // de decidir qué mostrar (una apertura anterior puede haberlo reemplazado
     // con el selector de subtickets). No se toca index.html: el HTML original
     // se restaura acá en JS.
-    const _TAKE_NORMAL_HTML_DEFAULT_ = '<button class="btn-primary" onclick="confirmTake()">Sí, tomarla</button>';
+    const _TAKE_NORMAL_HTML_DEFAULT_ = '<button id="takeConfirmBtn" class="btn-primary" onclick="confirmTake()">Sí, tomarla</button>';
     if (normalEl) normalEl.innerHTML = _TAKE_NORMAL_HTML_DEFAULT_;
     window._takingSubticketActivo = false;
     window._takingSubticketTicketRef = '';
@@ -2796,11 +2796,15 @@
       }
       let result;
       try {
+        // FASE 1 ACOTADA (DEV) Parte E — tomarClienta no es idempotente: sin
+        // reintento automático (retries:0) para no arriesgar una doble toma
+        // si el servidor procesó el intento pero el cliente no recibió la
+        // respuesta a tiempo.
         result = await apiPost('tomarClienta', {
           idListaEspera: window._takingId,
           chicaNombre: name,
           componentesSeleccionados: componentesSeleccionados
-        });
+        }, { retries: 0, timeoutMs: 15000 });
       } catch (err) {
         // Error de red (F04): modal permanece abierto, checkbox sigue
         // marcado (no se tocó window._subticketSeleccion), botón se
@@ -2817,9 +2821,24 @@
       // arriba) muestra el error y NO continúa — sin excepciones que dejen
       // pasar un success:false (F01/F02).
       if (!result || result.success !== true) {
-        const msg = (result && (result.message || result.error))
-          || 'No se pudo iniciar el servicio.';
-        alert(msg);
+        if (result && result.error && !result.message) {
+          // FASE 1 ACOTADA (DEV) Parte E — fallo de red/timeout (apiPost
+          // resuelve con {error:...} en vez de tirar excepción): el backend
+          // puede haber procesado la toma igual. No declarar fracaso
+          // definitivo ni reintentar solo; refresco liviano para verificar
+          // el estado real antes de permitir un nuevo intento.
+          alert('No se pudo confirmar la respuesta del servidor. Verifica si la clienta ya aparece en atención antes de intentar otra vez.');
+          // CORRECCIÓN PRE-DEV — diferido con setTimeout(...,0): mientras
+          // esta función no retorne, window._confirmTakeEnCurso sigue en
+          // true (lo libera el finally de confirmTake(), en el wrapper).
+          // Si se llamara ahora mismo, el guard de Parte 2 lo bloquearía.
+          setTimeout(function () {
+            if (typeof refrescarAsignacionesStaff === 'function') refrescarAsignacionesStaff();
+          }, 0);
+        } else {
+          const msg = (result && result.message) || 'No se pudo iniciar el servicio.';
+          alert(msg);
+        }
         return; // modal permanece abierto, selección intacta
       }
       // ── Éxito real confirmado — recién ahora: cerrar modal, notificar,
@@ -2834,24 +2853,49 @@
       if (window._subticketComponentes) delete window._subticketComponentes[_grupoId];
       window._takingSubticketActivo = false;
     } else {
-    // ── FLUJO NORMAL / SN / SP / LE (legacy, EXACTO, sin cambios de lógica —
-    //    solo se movió closeModal() a esta rama, sin alterar su comportamiento) ──
-    closeModal();
+    // ── FLUJO NORMAL / SN / SP / LE (legacy) ──────────────────────────────
+    // FASE 1 ACOTADA (DEV) Parte F — hallazgo de Fase 0: acá se cerraba el
+    // modal ANTES de esperar la respuesta de tomarClienta, así que un
+    // timeout hacía que el código siguiera como si hubiera tenido éxito.
+    // Ahora: deshabilitar botón + "Procesando...", esperar la respuesta
+    // real, y solo cerrar el modal si success === true.
+    const _btnLegacy = document.getElementById('takeConfirmBtn');
+    const _btnLegacyTxtOrig = _btnLegacy ? _btnLegacy.textContent : '';
+    if (_btnLegacy) { _btnLegacy.disabled = true; _btnLegacy.textContent = 'Procesando...'; }
+    let resultLegacy;
     try {
-      const result = await apiPost('tomarClienta', {
+      // FASE 1 ACOTADA (DEV) Parte E — sin reintento automático (no idempotente).
+      resultLegacy = await apiPost('tomarClienta', {
         idListaEspera: window._takingId,
         chicaNombre: name
-      });
-      if (result.success) {
-        simulateNotif('mikaela', name + ' tomó a ' + (window._takingClientCode || 'una clienta'), 'Lista de espera · ahora', false);
-      } else if (result.message) {
-        alert(result.message);
-        return;
-      }
+      }, { retries: 0, timeoutMs: 15000 });
     } catch (err) {
+      if (_btnLegacy) { _btnLegacy.disabled = false; _btnLegacy.textContent = _btnLegacyTxtOrig; }
       console.error('Error al tomar clienta:', err);
       alert('Error al tomar la clienta. Intentá de nuevo.');
-      return;
+      return; // modal permanece abierto, botón restaurado
+    }
+    if (resultLegacy && resultLegacy.success === true) {
+      closeModal();
+      simulateNotif('mikaela', name + ' tomó a ' + (window._takingClientCode || 'una clienta'), 'Lista de espera · ahora', false);
+    } else if (resultLegacy && resultLegacy.message) {
+      // Rechazo explícito del backend (ej. ya tomada por otra persona).
+      if (_btnLegacy) { _btnLegacy.disabled = false; _btnLegacy.textContent = _btnLegacyTxtOrig; }
+      alert(resultLegacy.message);
+      return; // modal permanece abierto, botón restaurado
+    } else {
+      // FASE 1 ACOTADA (DEV) Parte E — fallo de red/timeout: el backend
+      // puede haber procesado la toma igual. No declarar fracaso definitivo
+      // ni mostrar éxito falso. Refresco liviano para verificar el estado
+      // real antes de permitir un nuevo intento.
+      if (_btnLegacy) { _btnLegacy.disabled = false; _btnLegacy.textContent = _btnLegacyTxtOrig; }
+      alert('No se pudo confirmar la respuesta del servidor. Verifica si la clienta ya aparece en atención antes de intentar otra vez.');
+      // CORRECCIÓN PRE-DEV — mismo motivo que en la rama nativa: diferir
+      // hasta que el finally de confirmTake() libere _confirmTakeEnCurso.
+      setTimeout(function () {
+        if (typeof refrescarAsignacionesStaff === 'function') refrescarAsignacionesStaff();
+      }, 0);
+      return; // modal permanece abierto, botón restaurado
     }
     } // ── fin else nativo-con-selector / legacy ────────────────────────────
     
