@@ -2180,9 +2180,21 @@
   // híbrido.
   function _tieneIdentidadEstableParaSelector_(componentes) {
     const lista = Array.isArray(componentes) ? componentes : [];
-    return lista.length > 1 && lista.every(function (c) {
-      return c && c.id !== undefined && c.id !== null && String(c.id).trim() !== '';
+    if (lista.length <= 1) return false;
+    const ids = lista.map(function (c) {
+      return (c && c.id !== undefined && c.id !== null) ? String(c.id).trim() : '';
     });
+    const todosConId = ids.every(function (id) { return id !== ''; });
+    if (!todosConId) return false;
+    // Bloque 2N-2C.2 (VIS-SN07) — ids no vacíos no bastan: deben ser
+    // distintos. Ids duplicados son datos inconsistentes: se conserva el
+    // comportamiento legacy (sin selector) y se advierte en consola.
+    const idsDistintos = new Set(ids).size === ids.length;
+    if (!idsDistintos) {
+      console.warn('[_tieneIdentidadEstableParaSelector_] componentes con id duplicado — datos inconsistentes, se conserva flujo legacy', componentes);
+      return false;
+    }
+    return true;
   }
   window._tieneIdentidadEstableParaSelector_ = _tieneIdentidadEstableParaSelector_;
 
