@@ -1771,6 +1771,219 @@
 
   // === RETIRO GRATIS / $10 ===
 
+  // ══════════════════════════════════════════════════════════════════════
+  // FASE 1 ACOTADA (DEV) — Parte A + Parte B. Helpers de render compartidos
+  // entre loadStaffHome() (carga completa) y refrescarAsignacionesStaff()
+  // (refresco liviano del timer/focus). No se toca ninguna regla de LINEAS,
+  // promociones, cobro ni comisiones — solo se extrae código YA EXISTENTE de
+  // loadStaffHome a funciones reutilizables, sin cambiar filtros ni HTML.
+  // ══════════════════════════════════════════════════════════════════════
+
+  // Render de "Por empezar" — EXACTAMENTE el mismo filtro y HTML que antes,
+  // ahora recibe la lista ya obtenida en vez de pedirla de nuevo.
+  function _renderPorEmpezarDesdeListaEspera_(listaEspera, user) {
+    try {
+      const _peSection = document.getElementById('staffPorEmpezarSection');
+      const _peList    = document.getElementById('staffPorEmpezarList');
+      if (!_peSection || !_peList) return;
+      const _mias = (listaEspera || []).filter(function (w) {
+        const est = String(w.estado || w.status || '').toLowerCase().replace('_', ' ');
+        if (est !== 'esperando') return false;   // solo las que aún no empezaron
+        const quien = (w.tomadaPor && String(w.tomadaPor).trim())
+                   || (w.asignadaA && String(w.asignadaA).trim()) || '';
+        return quien && quien.split(',').map(function(s){return s.trim();}).indexOf(user.name) !== -1;
+      });
+      // CORRECCIÓN PRE-DEV 2 — la reconciliación de grupos (inicializar +
+      // purgar) ya NO vive exclusivamente dentro de `if (_mias.length > 0)`:
+      // corre siempre, incluida una respuesta vacía (_mias.length === 0),
+      // que es exactamente el caso "el backend ya no trae este ticket
+      // esperando" tras un timeout ambiguo. Nunca se crea un grupo con
+      // identificador vacío.
+      window._subticketSeleccion   = window._subticketSeleccion   || {};
+      window._subticketComponentes = window._subticketComponentes || {};
+
+      const _gruposVigentes = {};
+      _mias.forEach(function (w) {
+        const _gid = String(w.idEspera || w.id || w.ticket_ref || '');
+        if (_gid) _gruposVigentes[_gid] = true;
+      });
+      Object.keys(window._subticketSeleccion).forEach(function (gid) {
+        if (!_gruposVigentes[gid]) delete window._subticketSeleccion[gid];
+      });
+      Object.keys(window._subticketComponentes).forEach(function (gid) {
+        if (!_gruposVigentes[gid]) delete window._subticketComponentes[gid];
+      });
+
+      if (_mias.length > 0) {
+        _peSection.style.display = 'block';
+        // CORRECCIÓN PRE-DEV — ya NO se reinicia incondicionalmente la
+        // selección en cada render (eso rompía una selección que la staff
+        // estuviera construyendo mientras corría el refresco automático).
+        // La inicialización y purga de grupos ya se hizo arriba, para
+        // cualquier _mias (incluida vacía). Acá solo queda: dentro de cada
+        // grupo vigente, conservar únicamente los ids que siguen existiendo
+        // en serviciosDetalle Y siguen siendo seleccionables — el resto se
+        // descarta. Nunca se mezcla selección entre grupoId distintos.
+        _peList.innerHTML = _mias.map(function (w) {
+          const _cod = String(w.codigo || '').replace(/'/g, "\\'");
+          const _nom = String(w.nombre || '').replace(/'/g, "\\'");
+          const _svc = String(w.servicio || w.promoNombre || 'Servicio');
+          const _tot = Number(w.total || 0);
+          const _idEspera = String(w.idEspera || w.id || w.ticket_ref || '');
+
+          // Compatibilidad legacy (regla obligatoria — Corrección B.1,
+          // ahora centralizada en el helper compartido): el selector
+          // nuevo SOLO se activa si hay más de un componente Y TODOS
+          // traen id real (identidad estable de Parte A). Si alguno no
+          // trae id, el ticket completo conserva EXACTAMENTE el botón y
+          // comportamiento legacy — no se arma un selector híbrido.
+          const _detalle = Array.isArray(w.serviciosDetalle) ? w.serviciosDetalle : [];
+          const _tieneComponentesReales = _tieneIdentidadEstableParaSelector_(_detalle);
+
+          if (!_tieneComponentesReales) {
+            // Este ticket ya no usa selector (o nunca lo usó) — asegurar que
+            // no arrastre selección vieja si antes sí la tuvo.
+            delete window._subticketComponentes[_idEspera];
+            delete window._subticketSeleccion[_idEspera];
+            return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
+              + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
+              + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
+              + '<button onclick="iniciarClientaStaff(\'' + _cod + '\',\'' + _nom + '\')" '
+              + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
+              + '</div>';
+          }
+
+          // ── Selector real de subtickets (Parte B, vía helper compartido
+          // Fase 0) ─────────────────────────────────────────────────────
+          // Identidad por componente.id (nunca nombre/monto/posición). El
+          // helper guarda el objeto REAL completo (id/promoRef/ticketRef/
+          // estado/staff/servicio/area/monto — ver Parte A) solo para los
+          // componentes seleccionables, en window._subticketComponentes,
+          // para que la confirmación lea la identidad exacta.
+          const _filasNormalizadas = normalizarComponentesSeleccionables_(_detalle, user.name);
+
+          // CORRECCIÓN PRE-DEV — reconciliar la selección previa de ESTE
+          // grupo: descartar únicamente los ids que ya no son seleccionables
+          // (fueron tomados, anulados, o ya no están en serviciosDetalle).
+          // Los ids que siguen esperando y siguen presentes se conservan.
+          const _idsSeleccionablesVigentes = {};
+          _filasNormalizadas.forEach(function (f) { if (f.seleccionable) _idsSeleccionablesVigentes[f.id] = true; });
+          const _seleccionPrevia = window._subticketSeleccion[_idEspera] || {};
+          Object.keys(_seleccionPrevia).forEach(function (id) {
+            if (!_idsSeleccionablesVigentes[id]) delete _seleccionPrevia[id];
+          });
+          window._subticketSeleccion[_idEspera] = _seleccionPrevia;
+          // El mapa de componentes SÍ se reconstruye desde cero en cada
+          // render (renderSelectorSubtickets_ lo vuelve a llenar abajo con
+          // los objetos reales vigentes) — la selección (arriba) es lo único
+          // que se preserva entre renders.
+          window._subticketComponentes[_idEspera] = {};
+
+          const _filas = renderSelectorSubtickets_({
+            grupoId: _idEspera,
+            filas: _filasNormalizadas,
+            mapaDestino: window._subticketComponentes[_idEspera]
+          });
+
+          return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
+            + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
+            + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
+            + '<div style="background:var(--bg);border-radius:12px;padding:2px 12px;margin-bottom:10px;">' + _filas + '</div>'
+            + '<div id="subSelMsg_' + _idEspera + '" style="font-size:12px;color:var(--ink-faint);font-weight:700;margin-bottom:8px;">Selecciona al menos un servicio</div>'
+            + '<button id="subSelBtn_' + _idEspera + '" disabled onclick="confirmarSeleccionSubtickets(\'' + _idEspera + '\',\'' + _cod + '\',\'' + _nom + '\')" '
+            + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:not-allowed;opacity:0.5;">▶ Iniciar seleccionados (0)</button>'
+            + '</div>';
+        }).join('');
+
+        // CORRECCIÓN PRE-DEV — el contador y botón de cada grupo deben
+        // reflejar la selección preservada (arriba solo se corrigió el
+        // checkbox visual). Reutiliza el helper existente, ya usado por
+        // toggleSubticketSeleccion — no se duplica la lógica de conteo.
+        _mias.forEach(function (w) {
+          const _idEspera = String(w.idEspera || w.id || w.ticket_ref || '');
+          if (window._subticketSeleccion[_idEspera] && Object.keys(window._subticketSeleccion[_idEspera]).length > 0) {
+            _refrescarContadorSubtickets(_idEspera);
+          }
+        });
+      } else {
+        _peSection.style.display = 'none';
+        _peList.innerHTML = '';
+      }
+    } catch (ePE) { console.warn('[porEmpezar]', ePE); }
+  }
+
+  // Actualiza los contadores de espera (navBadge, navBadge2, pendingStat).
+  // Mismo cálculo que antes (incluye variables sin uso ya presentes en el
+  // original — no se tocan, para no alterar nada más que la fuente del dato).
+  function _actualizarContadoresEspera_(listaEspera, user) {
+    if (!listaEspera) return;
+    const allowed = AREA_FILTER[user.area] || [];
+    const areaMap2 = { 'cejas': 'cejas', 'depilación': 'depilacion', 'depilacion': 'depilacion', 'pestañas': 'pestanas', 'pestanas': 'pestanas', 'facial': 'facial', 'lifting / retiro': 'retiro_lifting', 'pestañas/cejas': 'retiro_lifting' };
+    // MODELO CENTRALIZADO: contar solo las asignadas a esta staff (igual que la lista)
+    const myCount = listaEspera.filter(w => {
+      const est = String(w.estado || w.status || '').toLowerCase();
+      if (est === 'en servicio' || est === 'completada') return false;
+      const quien = (w.asignadaA && String(w.asignadaA).trim()) || (w.tomadaPor && String(w.tomadaPor).trim()) || ''; return quien !== '' && quien === user.name;
+    }).length;
+    var _nb=document.getElementById('navBadge'); if(_nb) _nb.textContent = myCount;
+    var _nb2=document.getElementById('navBadge2'); if(_nb2) _nb2.textContent = myCount;
+    var _ps = document.getElementById('pendingStat'); if (_ps) { var _psv = _ps.querySelector('.value'); if (_psv) _psv.textContent = myCount; }
+  }
+
+  // CORRECCIÓN PRE-DEV — el refresco NUNCA debe pisar una operación de toma
+  // en curso: ni el "Tomar clienta" del modal (window._confirmTakeEnCurso),
+  // ni ningún envío de "Por empezar" en vuelo
+  // (window._subticketEnvioEnCurso[idEspera] === true para cualquier id).
+  // No basta con el dedupe de _staffAssignmentsRefreshPromise porque esa
+  // promesa es de OTRO refresco, no de la toma en sí.
+  function _hayOperacionTomaEnCurso_() {
+    if (window._confirmTakeEnCurso) return true;
+    const _m = window._subticketEnvioEnCurso;
+    if (_m) {
+      for (const _k in _m) {
+        if (Object.prototype.hasOwnProperty.call(_m, _k) && _m[_k] === true) return true;
+      }
+    }
+    return false;
+  }
+
+  // ── Parte B — refresco liviano de asignaciones ──────────────────────────
+  // Usado por el timer de staffHome (router.js) y por focus/visibilitychange
+  // (api.js) en vez de loadStaffHome() completo. Solo pide obtenerListaEspera
+  // una vez y actualiza "Por empezar" + contadores. NO recarga servicios del
+  // día, comisiones, fichas ni promociones.
+  async function refrescarAsignacionesStaff() {
+    if (window._staffAssignmentsRefreshPromise) return window._staffAssignmentsRefreshPromise;
+
+    const user = window.currentUser;
+    if (!user || user.role !== 'staff') return;
+    if (window._siraActivo || window._resumenBackup) return;
+    // Guard: verificar que el DOM de staffHome sigue siendo el vigente
+    if (!document.getElementById('staffPorEmpezarSection') && !document.getElementById('staffName')) return;
+    // CORRECCIÓN PRE-DEV — salir sin renderizar si hay una toma en curso.
+    if (_hayOperacionTomaEnCurso_()) return;
+
+    window._staffAssignmentsRefreshPromise = (async function () {
+      try {
+        const listaEspera = await LineaService.obtenerListaEspera().catch(function () { return []; });
+        // CORRECCIÓN PRE-DEV — revalidar justo antes de renderizar: pudo
+        // haber empezado una toma mientras esperábamos la respuesta del
+        // backend (obtenerListaEspera no es instantáneo).
+        if (_hayOperacionTomaEnCurso_()) return;
+        _renderPorEmpezarDesdeListaEspera_(listaEspera, user);
+        _actualizarContadoresEspera_(listaEspera, user);
+      } catch (e) {
+        console.warn('[refrescarAsignacionesStaff]', e);
+      }
+    })();
+
+    try {
+      await window._staffAssignmentsRefreshPromise;
+    } finally {
+      window._staffAssignmentsRefreshPromise = null;
+    }
+  }
+
   async function loadStaffHome() {
     // Guard: si SIRA o Comisiones están activos, el DOM de staffHome fue reemplazado
     if (window._siraActivo || window._resumenBackup) return;
@@ -1793,86 +2006,20 @@
       // Guard tardío: verificar que el DOM sigue siendo el de staffHome (no fue reemplazado por SIRA)
       if (!section || !list) return;
 
+      // FASE 1 ACOTADA (DEV) Parte A — una sola consulta a
+      // LineaService.obtenerListaEspera(), reutilizada acá abajo para "Por
+      // empezar" (render) y más abajo para los contadores. Antes eran dos
+      // round-trips completos a Apps Script en la misma carga (PERF-A1).
+      // No es caché persistente: se pide de nuevo en cada loadStaffHome().
+      const listaEsperaResult = await LineaService.obtenerListaEspera().catch(function(){ return []; });
+
       // ── POR EMPEZAR (Espera por staff) ─────────────────────────────────────
       // Clientas asignadas a esta staff que todavía están 'esperando' en LINEAS.
       // La staff toca "Confirmar / Empezar" → iniciarServicioStaff → 'en_servicio'.
-      try {
-        const _peSection = document.getElementById('staffPorEmpezarSection');
-        const _peList    = document.getElementById('staffPorEmpezarList');
-        if (_peSection && _peList) {
-          const _wait = await LineaService.obtenerListaEspera().catch(function(){ return []; });
-          const _mias = (_wait || []).filter(function (w) {
-            const est = String(w.estado || w.status || '').toLowerCase().replace('_', ' ');
-            if (est !== 'esperando') return false;   // solo las que aún no empezaron
-            const quien = (w.tomadaPor && String(w.tomadaPor).trim())
-                       || (w.asignadaA && String(w.asignadaA).trim()) || '';
-            return quien && quien.split(',').map(function(s){return s.trim();}).indexOf(user.name) !== -1;
-          });
-          if (_mias.length > 0) {
-            _peSection.style.display = 'block';
-            // Bloque 2N-2B.1 Parte B — la selección local es efímera: se
-            // reconstruye en cada render (no persiste entre recargas; eso es
-            // responsabilidad de Parte D). Reset acá evita mezclar selección
-            // entre clientas o entre renders (B-UI8).
-            window._subticketSeleccion = {};
-            window._subticketComponentes = {};
-            _peList.innerHTML = _mias.map(function (w) {
-              const _cod = String(w.codigo || '').replace(/'/g, "\\'");
-              const _nom = String(w.nombre || '').replace(/'/g, "\\'");
-              const _svc = String(w.servicio || w.promoNombre || 'Servicio');
-              const _tot = Number(w.total || 0);
-              const _idEspera = String(w.idEspera || w.id || w.ticket_ref || '');
-
-              // Compatibilidad legacy (regla obligatoria — Corrección B.1,
-              // ahora centralizada en el helper compartido): el selector
-              // nuevo SOLO se activa si hay más de un componente Y TODOS
-              // traen id real (identidad estable de Parte A). Si alguno no
-              // trae id, el ticket completo conserva EXACTAMENTE el botón y
-              // comportamiento legacy — no se arma un selector híbrido.
-              const _detalle = Array.isArray(w.serviciosDetalle) ? w.serviciosDetalle : [];
-              const _tieneComponentesReales = _tieneIdentidadEstableParaSelector_(_detalle);
-
-              if (!_tieneComponentesReales) {
-                return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
-                  + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
-                  + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-                  + '<button onclick="iniciarClientaStaff(\'' + _cod + '\',\'' + _nom + '\')" '
-                  + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
-                  + '</div>';
-              }
-
-              // ── Selector real de subtickets (Parte B, vía helper compartido
-              // Fase 0) ─────────────────────────────────────────────────────
-              // Identidad por componente.id (nunca nombre/monto/posición). El
-              // helper guarda el objeto REAL completo (id/promoRef/ticketRef/
-              // estado/staff/servicio/area/monto — ver Parte A) solo para los
-              // componentes seleccionables, en window._subticketComponentes,
-              // para que la confirmación lea la identidad exacta.
-              window._subticketComponentes[_idEspera] = window._subticketComponentes[_idEspera] || {};
-              window._subticketSeleccion[_idEspera] = window._subticketSeleccion[_idEspera] || {};
-
-              const _filasNormalizadas = normalizarComponentesSeleccionables_(_detalle, user.name);
-              const _filas = renderSelectorSubtickets_({
-                grupoId: _idEspera,
-                filas: _filasNormalizadas,
-                mapaDestino: window._subticketComponentes[_idEspera]
-              });
-
-              return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
-                + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
-                + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-                + '<div style="background:var(--bg);border-radius:12px;padding:2px 12px;margin-bottom:10px;">' + _filas + '</div>'
-                + '<div id="subSelMsg_' + _idEspera + '" style="font-size:12px;color:var(--ink-faint);font-weight:700;margin-bottom:8px;">Selecciona al menos un servicio</div>'
-                + '<button id="subSelBtn_' + _idEspera + '" disabled onclick="confirmarSeleccionSubtickets(\'' + _idEspera + '\',\'' + _cod + '\',\'' + _nom + '\')" '
-                + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:not-allowed;opacity:0.5;">▶ Iniciar seleccionados (0)</button>'
-                + '</div>';
-            }).join('');
-          } else {
-            _peSection.style.display = 'none';
-            _peList.innerHTML = '';
-          }
-        }
-      } catch (ePE) { console.warn('[porEmpezar]', ePE); }
+      // El render vive en el helper compartido _renderPorEmpezarDesdeListaEspera_
+      // (definido antes de loadStaffHome), reutilizado también por
+      // refrescarAsignacionesStaff() — misma lógica, sin duplicar código.
+      _renderPorEmpezarDesdeListaEspera_(listaEsperaResult, user);
       
       if (result.success && result.atenciones && result.atenciones.length > 0) {
         section.style.display = 'block';
@@ -2065,21 +2212,10 @@
         if (section) section.style.display = 'none';
       }
       
-      // Actualizar contadores
-      const waitResult = await LineaService.obtenerListaEspera().then(function(l){ return {success:true, lista:l}; }).catch(function(){ return apiGet('getListaEspera'); });
-      if (waitResult.success) {
-        const allowed = AREA_FILTER[user.area] || [];
-        const areaMap2 = { 'cejas': 'cejas', 'depilación': 'depilacion', 'depilacion': 'depilacion', 'pestañas': 'pestanas', 'pestanas': 'pestanas', 'facial': 'facial', 'lifting / retiro': 'retiro_lifting', 'pestañas/cejas': 'retiro_lifting' };
-        // MODELO CENTRALIZADO: contar solo las asignadas a esta staff (igual que la lista)
-        const myCount = waitResult.lista.filter(w => {
-          const est = String(w.estado || w.status || '').toLowerCase();
-          if (est === 'en servicio' || est === 'completada') return false;
-          const quien = (w.asignadaA && String(w.asignadaA).trim()) || (w.tomadaPor && String(w.tomadaPor).trim()) || ''; return quien !== '' && quien === user.name;
-        }).length;
-        var _nb=document.getElementById('navBadge'); if(_nb) _nb.textContent = myCount;
-        var _nb2=document.getElementById('navBadge2'); if(_nb2) _nb2.textContent = myCount;
-        var _ps = document.getElementById('pendingStat'); if (_ps) { var _psv = _ps.querySelector('.value'); if (_psv) _psv.textContent = myCount; }
-      }
+      // Actualizar contadores — FASE 1 ACOTADA (DEV) Parte A: reutiliza
+      // listaEsperaResult (ya obtenida arriba) en vez de una segunda consulta
+      // a obtenerListaEspera. Mismo cálculo, en el helper compartido.
+      _actualizarContadoresEspera_(listaEsperaResult, user);
 
       // Cargar servicios completados hoy
       const _svHoy = await LineaService.obtenerServiciosHoy(user.name);
@@ -2212,6 +2348,12 @@
     const grupoId = (opciones && opciones.grupoId) || '';
     const filas = (opciones && opciones.filas) || [];
     const mapaDestino = (opciones && opciones.mapaDestino) || {};
+    // CORRECCIÓN PRE-DEV — reconstruir el estado visual (checked) desde la
+    // selección YA PRESERVADA en window._subticketSeleccion, en vez de
+    // renderizar siempre desmarcado. Esta función solo LEE la selección
+    // existente; quien decide qué se preserva/descarta es
+    // _renderPorEmpezarDesdeListaEspera_ (reconciliación por grupoId/id).
+    const _seleccionVigente = (window._subticketSeleccion && window._subticketSeleccion[grupoId]) || {};
     return filas.map(function (f) {
       const label = String((f.componente && (f.componente.servicio || f.componente.area)) || 'Servicio');
       const monto = Number((f.componente && f.componente.monto) || 0);
@@ -2219,8 +2361,9 @@
         mapaDestino[f.id] = f.componente;
         const idAttr = f.id.replace(/'/g, "\\'");
         const grupoAttr = String(grupoId).replace(/'/g, "\\'");
+        const _marcado = !!_seleccionVigente[f.id];
         return '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);cursor:pointer;">'
-          + '<input type="checkbox" onchange="toggleSubticketSeleccion(\'' + grupoAttr + '\',\'' + idAttr + '\', this.checked)" style="width:18px;height:18px;flex:none;">'
+          + '<input type="checkbox" ' + (_marcado ? 'checked ' : '') + 'onchange="toggleSubticketSeleccion(\'' + grupoAttr + '\',\'' + idAttr + '\', this.checked)" style="width:18px;height:18px;flex:none;">'
           + '<span style="font-size:13px;flex:1;">' + label + (monto ? (' · $' + monto) : '') + '</span>'
           + '</label>';
       }
@@ -2355,18 +2498,38 @@
     }
 
     try {
+      // FASE 1 ACOTADA (DEV) Parte E — tercera superficie real de tomarClienta
+      // (botón "Por empezar"/selector de subtickets). Sin reintento automático.
       const r = await apiPost('tomarClienta', {
         idEspera: idEspera,
         chicaNombre: user.name,
         componentesSeleccionados: componentesSeleccionados
-      });
+      }, { retries: 0, timeoutMs: 15000 });
 
       // No asumir éxito solo por response.success === true — leer los
       // conteos reales que devuelve iniciarComponentesTicketNativoPorRef_.
       if (!r || r.success !== true) {
+        if (r && r.error && !r.message) {
+          // FASE 1 ACOTADA (DEV) Parte E — fallo de red/timeout: el backend
+          // puede haber procesado la toma igual. No declarar fracaso
+          // definitivo; refresco liviano para verificar antes de reintentar.
+          if (_elMsg) _elMsg.textContent = 'No se pudo confirmar la respuesta del servidor. Verifica si la clienta ya aparece en atención.';
+          if (typeof showToast === 'function') showToast('⚠ Sin confirmación del servidor — verificando estado…');
+          // CORRECCIÓN PRE-DEV — diferido con setTimeout(...,0): si se
+          // llamara ahora mismo, el guard de Parte 2 lo bloquearía porque
+          // window._subticketEnvioEnCurso[idEspera] sigue en true hasta el
+          // finally de esta misma función. Al diferirlo, se ejecuta recién
+          // después de que el finally libere el guard, y con eso alcanza
+          // para verificar sin destruir la selección de OTROS tickets ni de
+          // este, si el backend todavía no lo procesó.
+          setTimeout(function () {
+            if (typeof refrescarAsignacionesStaff === 'function') refrescarAsignacionesStaff();
+          }, 0);
+          return;
+        }
         // Error backend: no limpiar selección, no quitar la tarjeta, no
         // tocar slotServices. El guard se libera en el finally.
-        const _errMsg = (r && (r.message || r.error)) || 'No se pudo iniciar';
+        const _errMsg = (r && r.message) || 'No se pudo iniciar';
         if (_elMsg) _elMsg.textContent = 'Error: ' + _errMsg;
         if (typeof showToast === 'function') showToast('⚠ Error al iniciar: ' + _errMsg);
         return;
