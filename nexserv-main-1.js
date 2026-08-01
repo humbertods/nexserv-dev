@@ -2613,7 +2613,14 @@
     }
 
     // ── DEPILACIÓN CORPORAL: múltiples ítems ──
-    const esDepi = w.area === 'depilacion' || servicioStr0.toLowerCase().includes('depi') || servicioStr0.toLowerCase().includes('bikini') || servicioStr0.toLowerCase().includes('pierna') || servicioStr0.toLowerCase().includes('axila');
+    // Bloque 2N-2C.2 — el split por texto (+ / ,) solo es válido para
+    // tickets legacy SIN serviciosDetalle real (feature histórica de
+    // depilación corporal, sin respaldo LINEAS). Si el ticket YA trae
+    // serviciosDetalle (aunque sea una sola línea real, ej. SN con nombre
+    // compuesto "Depilación + Brow lamination"), nunca se divide por texto:
+    // el nombre no participa en la decisión de subtickets.
+    const _tieneDetalleReal = _detalleTake.length > 0;
+    const esDepi = !_tieneDetalleReal && (w.area === 'depilacion' || servicioStr0.toLowerCase().includes('depi') || servicioStr0.toLowerCase().includes('bikini') || servicioStr0.toLowerCase().includes('pierna') || servicioStr0.toLowerCase().includes('axila'));
 
     if (esDepi) {
       let servicioRaw3 = servicioStr0;
@@ -5060,4 +5067,3 @@ window._lineasLineasAAreasModal = _lineasLineasAAreasModal;
 window.cobrarPromoCompleta = cobrarPromoCompleta;
 window.finishAndContinueSameStaff = finishAndContinueSameStaff;
 window.compartirSiguienteServicio = compartirSiguienteServicio;
-
