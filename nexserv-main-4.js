@@ -2058,6 +2058,19 @@
       //   → slotServices solo tiene el nuevo servicio pendiente (sin servicios aprobados previos)
       // Extra: hay SP- pero el servicio original sigue en slotServices
       const _idEsperaSlot = slot === 1 ? (window._as1IdEspera || '') : (window._as2IdEspera || '');
+
+      // ── BLOQUE 2N-2C.2 (corrección) — ticket exacto del slot, obligatorio ────
+      // Antes esta solicitud no llevaba ningún ticket_ref; el backend tenía que
+      // ADIVINARLO por código de clienta al aprobar (ambiguo si hay 2 tickets
+      // activos el mismo día). Ahora se propaga el idEspera REAL del slot que
+      // disparó la solicitud. Si no está disponible, NO se envía la solicitud
+      // — nunca se intenta resolver por código como reemplazo.
+      if (!_idEsperaSlot) {
+        console.error('[sendAuthorizationRequest] ticketRef vacío — no se puede enviar la solicitud sin ticket real (slot ' + slot + ')');
+        alert('No se pudo identificar el ticket de esta clienta. No se envió la solicitud de servicio extra — avisá a Mikaela.');
+        return;
+      }
+
       const _esSP = _idEsperaSlot.startsWith('SP-');
       // Contar servicios aprobados (sin status o status !== pendiente/rechazado) excluyendo el nuevo
       const _svcsAprobados = (slotServices[slot] || []).filter(function(s) {
@@ -2075,7 +2088,10 @@
         nota: service.note,
         idEsperaSP: _esCambioPromo ? _idEsperaSlot : '',
         esCambioPromo: _esCambioPromo,
-        staffArea: user?.area || ''
+        staffArea: user?.area || '',
+        // ticket exacto del slot — ver guardia arriba, nunca vacío en este punto.
+        ticketRef: _idEsperaSlot,
+        idEspera: _idEsperaSlot
       };
       
       console.log('📤 Sending to backend:', payload);
