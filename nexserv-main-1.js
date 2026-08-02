@@ -2682,12 +2682,22 @@
       splitEl.style.display = 'block';
       normalEl.style.display = 'none';
       renderDepiItems();
+      document.getElementById('takeModal').classList.add('active');
     } else {
-      splitEl.style.display = 'none';
-      normalEl.style.display = 'block';
+      // CORRECCIÓN — ELIMINAR PRIMERA CONFIRMACIÓN. Este es el flujo normal:
+      // un servicio comercial único (SN/SP/LE), sin selector nativo real (ya
+      // habría retornado arriba), sin TM (ya habría retornado arriba), sin
+      // historial de enganche (ya habría retornado arriba), y sin combo real
+      // de depilación (esDepi=false acá). No hay nada seleccionable que
+      // mostrar — la primera confirmación con casillas era innecesaria y
+      // confundía el flujo. Se ejecuta la toma directamente; la ÚNICA
+      // confirmación visible sigue siendo "Servicio asignado"
+      // (showConfirmServiceModal, llamada por loadClientAfterTake tras
+      // success:true — ver confirmTake_()). No se duplica esa lógica acá:
+      // confirmTake() ya trae su propio guard anti-doble-toque
+      // (window._confirmTakeEnCurso) y su propio manejo de éxito/fallo.
+      confirmTake();
     }
-
-    document.getElementById('takeModal').classList.add('active');
   }
 
   function renderDepiItems() {
