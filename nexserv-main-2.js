@@ -4380,8 +4380,15 @@
                   // reales fuera del combo, se respeta el mayor.)
                   totalAcumDisplay = Math.max(_promoPrecioFijo, Number(a.total) || 0);
                 } else {
-                  // Multi-servicio SIN promo fija: sí se suman las partes hechas + la actual.
-                  totalAcumDisplay = Math.max(totalAcumDisplay, totalDetalle + Number(a.total || 0));
+                  // FIX PROBLEMA 2A (ver diagnóstico) — serviciosDetalle YA es el desglose
+                  // COMPLETO del ticket (base + extras aprobados), no partes "hechas" que
+                  // falten sumarle a a.total: a.total y totalDetalle describen el MISMO
+                  // total agregado por dos caminos distintos (backend vs. suma de líneas
+                  // mostradas). Sumarlos duplicaba el total — caso real: base $35 + extra
+                  // $5 → a.total=40, totalDetalle=40, se mostraba $80. Se usa el mayor de
+                  // los dos, igual criterio que ya aplica la rama de promo fija arriba —
+                  // nunca la suma. No toca backend, LINEAS ni ServiciosExtras.
+                  totalAcumDisplay = Math.max(totalAcumDisplay, totalDetalle);
                 }
               }
             }
