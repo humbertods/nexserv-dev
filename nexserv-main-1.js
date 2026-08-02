@@ -2620,46 +2620,68 @@
     // compuesto "Depilación + Brow lamination"), nunca se divide por texto:
     // el nombre no participa en la decisión de subtickets.
     //
-    // CORRECCIÓN (caso C-0805) — el área 'depilacion' ahora es un requisito
-    // OBLIGATORIO (&&), no una alternativa más del OR. Antes, un Servicio
-    // Normal de OTRA área (ej. cejas) con un nombre histórico compuesto que
-    // solo CONTUVIERA la subcadena "depi"/"bikini"/"pierna"/"axila" — como
-    // "Depilación + pigmento" — entraba igual a esta rama, se partía por "+",
-    // se reconstruía buscando cada parte SOLO en CATALOGO.depilacion (nunca
-    // en el catálogo real del área), y se ignoraba w.total. Con el área como
-    // requisito, un ticket de cejas nunca entra acá, sin importar su nombre.
+    // CORRECCIÓN (caso C-0805) — el área 'depilacion' es requisito
+    // OBLIGATORIO (&&), no una alternativa más del OR.
+    //
+    // CORRECCIÓN (caso C-0684) — el área sola no alcanza: un SN de área
+    // depilacion con nombre histórico compuesto ("Depilación + Brow
+    // lamination", total $25, UN SOLO servicio comercial) volvía a
+    // dividirse falsamente, porque el match usaba "includes" — "Depilación"
+    // matcheaba cualquier ítem del catálogo que contuviera o estuviera
+    // contenido en esa palabra genérica (match ambiguo), y "Brow lamination"
+    // (que ni siquiera es de depilación) quedaba con precio inventado en $0.
+    // Ahora el selector legacy SOLO se muestra si se cumplen TODAS:
+    //   1. no hay serviciosDetalle real;
+    //   2. área normalizada = 'depilacion';
+    //   3. el texto produce 2+ partes al dividir por "+"/",";
+    //   4. TODAS esas partes tienen una coincidencia EXACTA e INEQUÍVOCA en
+    //      CATALOGO.depilacion (comparación normalizada completa, nunca
+    //      "includes" — y "inequívoca" significa exactamente un ítem del
+    //      catálogo con ese nombre exacto, no varios).
+    // Si falta cualquiera de las 4: NUNCA se llena window._depiItems, se
+    // conserva w.service completo y w.total completo en el flujo normal.
     const _tieneDetalleReal = _detalleTake.length > 0;
-    const esDepi =
-      !_tieneDetalleReal &&
-      String(w.area || '').trim().toLowerCase() === 'depilacion' &&
-      (
-        servicioStr0.toLowerCase().includes('depi') ||
-        servicioStr0.toLowerCase().includes('bikini') ||
-        servicioStr0.toLowerCase().includes('pierna') ||
-        servicioStr0.toLowerCase().includes('axila')
-      );
+    const _esAreaDepilacion = String(w.area || '').trim().toLowerCase() === 'depilacion';
+    const _nombreSugiereComboDepi = !_tieneDetalleReal && _esAreaDepilacion && (
+      servicioStr0.toLowerCase().includes('depi') ||
+      servicioStr0.toLowerCase().includes('bikini') ||
+      servicioStr0.toLowerCase().includes('pierna') ||
+      servicioStr0.toLowerCase().includes('axila')
+    );
 
-    if (esDepi) {
+    let esDepi = false;
+    let _depiItemsCandidatos = null;
+
+    if (_nombreSugiereComboDepi) {
       let servicioRaw3 = servicioStr0;
       if (servicioRaw3.trim().startsWith('{')) {
         try { servicioRaw3 = JSON.parse(servicioRaw3).nombre || servicioRaw3; }
         catch(e) { const m3 = servicioRaw3.match(/"nombre"\s*:\s*"([^"]+)"/); if (m3) servicioRaw3 = m3[1]; }
       }
       const partes = servicioRaw3.split(/\s*[\+\,]\s*/).map(s => s.trim()).filter(s => s && !s.includes('continuac') && !s.includes('completado'));
-      const items = partes.map(nombre => {
-        const catalogoDepi = CATALOGO.depilacion || [];
-        const match = catalogoDepi.find(c => c.name.toLowerCase().includes(nombre.toLowerCase()) || nombre.toLowerCase().includes(c.name.toLowerCase()));
-        return { nombre, precio: match ? Number(match.price) : 0, checked: true };
+      const catalogoDepi = CATALOGO.depilacion || [];
+      const candidatos = partes.map(nombre => {
+        const nombreNorm = nombre.trim().toLowerCase();
+        // Match EXACTO normalizado (nunca "includes"). "Inequívoco" = un
+        // solo ítem del catálogo con ese nombre exacto; si hay 0 o 2+
+        // coincidencias, no hay match válido.
+        const matches = catalogoDepi.filter(function (c) { return String(c.name || '').trim().toLowerCase() === nombreNorm; });
+        const matchUnico = matches.length === 1 ? matches[0] : null;
+        return { nombre, precio: matchUnico ? Number(matchUnico.price) : null, checked: true };
       });
-      window._depiItems = items;
-      if (items.length > 1) {
-        splitEl.style.display = 'block';
-        normalEl.style.display = 'none';
-        renderDepiItems();
-      } else {
-        splitEl.style.display = 'none';
-        normalEl.style.display = 'block';
-      }
+      // Reglas 3+4+5: 2+ partes, y TODAS con match real (así se garantiza a
+      // la vez "al menos 2 con match real" y "ninguna inventada en $0" —
+      // si una sola parte no matchea, no se divide, se cae al flujo normal).
+      const _todasMatchean = candidatos.every(function (it) { return it.precio !== null; });
+      esDepi = partes.length >= 2 && _todasMatchean;
+      if (esDepi) _depiItemsCandidatos = candidatos;
+    }
+
+    if (esDepi) {
+      window._depiItems = _depiItemsCandidatos;
+      splitEl.style.display = 'block';
+      normalEl.style.display = 'none';
+      renderDepiItems();
     } else {
       splitEl.style.display = 'none';
       normalEl.style.display = 'block';
@@ -3814,7 +3836,12 @@
         }
         
         // recargarAutorizacionesStaff se llama automaticamente desde show('activeService')
-        setTimeout(() => { show(slot === 0 ? 'activeService' : 'activeService2'); }, 300);
+        // CORRECCIÓN (demora visible) — antes había un setTimeout(...,300) acá.
+        // show() solo activa/desactiva elementos .screen; el modal de
+        // confirmación (ya abierto arriba vía confirmarServicioObligatorio)
+        // vive en una clase distinta (modal-bg), así que no hay riesgo de que
+        // este cambio de pantalla lo oculte. Se elimina la espera artificial.
+        await show(slot === 0 ? 'activeService' : 'activeService2');
       }
     } catch (err) {
       console.error('Error cargando datos de la clienta:', err);
@@ -3828,9 +3855,9 @@
         }
         activeClients[name].push({ name: window._takingClient || 'Clienta', code: window._takingClientCode || window._as1Client || window._as2Client || '', service: window._takingService || 'Servicio' });
         updateCapacityUI(name);
-        setTimeout(() => { show(slot === 0 ? 'activeService' : 'activeService2'); }, 300);
+        await show(slot === 0 ? 'activeService' : 'activeService2');
       } else {
-        setTimeout(() => { show('activeService'); }, 300);
+        await show('activeService');
       }
     }
   }
