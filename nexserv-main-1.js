@@ -1285,12 +1285,13 @@
         slotServices[slot] = _r7.lista.map(sd => ({
           name: sd.servicio || sd.nombre || sd.name || '',
           price: Number(sd.monto || sd.precio || sd.price || 0),
-          area: sd.area || a.area || ''
+          area: sd.area || a.area || '',
+          lineaId: String(sd.lineaId || '')
         }));
       } else if (a.servicio && a.servicio !== '—') {
         let nom = a.servicio;
         if (String(nom).trim().startsWith('{')) { try { const p = JSON.parse(nom); nom = p.nombre || p.name || nom; } catch (e) {} }
-        slotServices[slot] = [{ name: nom, price: Number(a.total || 0), area: a.area || '' }];
+        slotServices[slot] = [{ name: nom, price: Number(a.total || 0), area: a.area || '', lineaId: String(a.lineaId || '') }];
       } else { return; }
       renderServicesForSlot(slot);
       const total = (slotServices[slot] || []).reduce((s, v) => s + Number(v.price || 0), 0);
@@ -1464,7 +1465,7 @@
             const _r5 = _detalles5.length > 0 ? _serviciosDetalleActivosParaStaff_(_detalles5, user.name) : null;
 
             if (_r5 && _r5.esModerno) {
-              slotServices[1] = _r5.lista.map(function(sd){ return { name: sd.servicio || sd.nombre || sd.name, price: Number(sd.monto || sd.precio || sd.price || 0), area: sd.area || a1.area || '' }; });
+              slotServices[1] = _r5.lista.map(function(sd){ return { name: sd.servicio || sd.nombre || sd.name, price: Number(sd.monto || sd.precio || sd.price || 0), area: sd.area || a1.area || '', lineaId: String(sd.lineaId || '') }; });
               if (_r5.lista.length === 0) {
                 console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (doLogin slot1)', a1.idEspera);
               }
@@ -1485,18 +1486,18 @@
                 var _promoMatch = PROMOS.find(function(p){ return p.name === a1.promoNombre || p.promo === a1.promoNombre; });
                 if (_promoMatch) _precioPromo1 = Number(_promoMatch.precio || _promoMatch.price || _promoMatch.precioPromo || 0);
               }
-              slotServices[1] = [{ name: a1.promoNombre, price: _precioPromo1, area: a1.area || '', status: 'aprobado', isPromo: true }];
+              slotServices[1] = [{ name: a1.promoNombre, price: _precioPromo1, area: a1.area || '', status: 'aprobado', isPromo: true, lineaId: String(a1.lineaId || '') }];
               if (!window._availablePromo) {
                 window._availablePromo = { name: a1.promoNombre, price: _precioPromo1, regular: Number(a1.precioRegular || a1.total || 0) };
               }
             } else if (_r5) {
               // Legacy con detalles, sin promoNombre: comportamiento previo
               // (usar los detalles legacy tal cual, sin filtrar).
-              slotServices[1] = _r5.lista.map(function(sd){ return { name: sd.servicio || sd.nombre || sd.name, price: Number(sd.monto || sd.precio || sd.price || 0), area: sd.area || a1.area || '' }; });
+              slotServices[1] = _r5.lista.map(function(sd){ return { name: sd.servicio || sd.nombre || sd.name, price: Number(sd.monto || sd.precio || sd.price || 0), area: sd.area || a1.area || '', lineaId: String(sd.lineaId || '') }; });
             } else if (a1.servicio && a1.servicio !== '—') {
               let _n1 = a1.servicio;
               if (String(_n1).trim().startsWith('{')) { try { const _p1 = JSON.parse(_n1); _n1 = _p1.nombre || _p1.name || _n1; } catch(e){} }
-              slotServices[1] = [{ name: _n1, price: Number(a1.total || 0), area: a1.area || '' }];
+              slotServices[1] = [{ name: _n1, price: Number(a1.total || 0), area: a1.area || '', lineaId: String(a1.lineaId || '') }];
             }
             try { renderServicesForSlot(1); } catch(e1) {}
             const _t1 = (slotServices[1]||[]).reduce(function(s,v){ return s + Number(v.price||0); }, 0);
@@ -1527,7 +1528,11 @@
                 slotServices[2] = _r6.lista.map(function(sd){ return {
                   name: sd.servicio || sd.nombre || sd.name || '',
                   price: Number(sd.monto || sd.precio || sd.price || 0),
-                  area: sd.area || a2.area || ''
+                  area: sd.area || a2.area || '',
+                  // Bloque 8C — ver nota equivalente en la población de slot 1
+                  // (nexserv-main-2.js). Slot 2 solo se puebla acá, al iniciar
+                  // sesión — no hay ciclo de refresco activo para este slot.
+                  lineaId: String(sd.lineaId || '')
                 }; });
                 if (_r6.lista.length === 0) {
                   console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (doLogin slot2)', a2.idEspera);
@@ -1536,15 +1541,16 @@
                   window._availablePromo = { name: a2.promoNombre, price: Number(a2.total || 0), regular: Number(a2.precioRegular || a2.total || 0) };
                 }
               } else if (a2.promoNombre && a2.promoNombre.trim() !== '') {
-                slotServices[2] = [{ name: a2.promoNombre, price: Number(a2.total || 0), area: a2.area || '', status: 'aprobado', isPromo: true }];
+                slotServices[2] = [{ name: a2.promoNombre, price: Number(a2.total || 0), area: a2.area || '', status: 'aprobado', isPromo: true, lineaId: String(a2.lineaId || '') }];
               } else if (_r6) {
                 slotServices[2] = _r6.lista.map(function(sd){ return {
                   name: sd.servicio || sd.nombre || sd.name || '',
                   price: Number(sd.monto || sd.precio || sd.price || 0),
-                  area: sd.area || a2.area || ''
+                  area: sd.area || a2.area || '',
+                  lineaId: String(sd.lineaId || '')
                 }; });
               } else if (a2.servicio && a2.servicio !== '—') {
-                slotServices[2] = [{ name: a2.servicio, price: Number(a2.total || 0), area: a2.area || '' }];
+                slotServices[2] = [{ name: a2.servicio, price: Number(a2.total || 0), area: a2.area || '', lineaId: String(a2.lineaId || '') }];
               }
               try { renderServicesForSlot(2); } catch(e2) {}
               const _t2 = (slotServices[2]||[]).reduce(function(s,v){ return s + Number(v.price||0); }, 0);
@@ -3155,7 +3161,8 @@
               slotServices[1] = _r1.lista.map(sd => ({
                 name: sd.servicio || sd.nombre || sd.name || '',
                 price: Number(sd.monto || sd.precio || sd.price || 0),
-                area: a.area, status: undefined
+                area: a.area, status: undefined,
+                lineaId: String(sd.lineaId || '')
               }));
               if (_r1.esModerno && _r1.lista.length === 0) {
                 console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (loadClientAfterTake slot1)', a.idEspera);
@@ -3166,7 +3173,7 @@
               document.getElementById('as1SvcCount').textContent = String(slotServices[1].length);
             } else {
               // Sin desglose en absoluto → agregado permitido (comportamiento anterior).
-              slotServices[1] = [{ name: servicioNombre, price: servicioPrecio, area: a.area }];
+              slotServices[1] = [{ name: servicioNombre, price: servicioPrecio, area: a.area, lineaId: String(a.lineaId || '') }];
               renderServicesForSlot(1);
               document.getElementById('as1Total').textContent = '$' + servicioPrecio;
               document.getElementById('as1SvcCount').textContent = '1';
@@ -3220,7 +3227,8 @@
                 slotServices[1] = _restauradoP1.lista.map(function(sd){ return {
                   name: sd.servicio || sd.nombre || sd.name || '',
                   price: Number(sd.monto || sd.precio || sd.price || 0),
-                  area: sd.area || myArea, status: undefined
+                  area: sd.area || myArea, status: undefined,
+                  lineaId: String(sd.lineaId || '')
                 }; });
                 const _totalModerno1 = slotServices[1].reduce(function(s,v){ return s + Number(v.price||0); }, 0);
                 renderServicesForSlot(1);
@@ -3244,7 +3252,8 @@
                 slotServices[1].push({
                   name: promoFull.name,
                   area: myArea,
-                  price: myPrice
+                  price: myPrice,
+                  lineaId: String(a.lineaId || '')
                 });
 
                 // Actualizar UI
@@ -3470,12 +3479,13 @@
                 slotServices[1] = _r2.lista.map(sd => ({
                   name: sd.servicio || sd.nombre || sd.name || '',
                   price: Number(sd.monto || sd.precio || sd.price || 0),
-                  area: sd.area || a.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true
+                  area: sd.area || a.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true,
+                  lineaId: String(sd.lineaId || '')
                 }));
               } else {
                 let _nm1 = String(a.servicio || '');
                 if (_nm1.trim().startsWith('{')) { try { _nm1 = JSON.parse(_nm1).nombre || _nm1; } catch(e){} }
-                slotServices[1] = [{ name: _nm1, price: Number(a.total || 0), area: a.area || '', _yaEnLinea: true }];
+                slotServices[1] = [{ name: _nm1, price: Number(a.total || 0), area: a.area || '', _yaEnLinea: true, lineaId: String(a.lineaId || '') }];
               }
               renderServicesForSlot(1);
               const _tot1fb = slotServices[1].reduce((s,v) => s + Number(v.price||0), 0);
@@ -3545,7 +3555,8 @@
               slotServices[2] = _r3.lista.map(sd => ({
                 name: sd.servicio || sd.nombre || sd.name || '',
                 price: Number(sd.monto || sd.precio || sd.price || 0),
-                area: a.area, status: undefined
+                area: a.area, status: undefined,
+                lineaId: String(sd.lineaId || '')
               }));
               if (_r3.esModerno && _r3.lista.length === 0) {
                 console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (loadClientAfterTake slot2)', a.idEspera);
@@ -3555,7 +3566,7 @@
               document.getElementById('as2Total').textContent = '$' + totalCombinado2;
               document.getElementById('as2SvcCount').textContent = String(slotServices[2].length);
             } else {
-              slotServices[2] = [{ name: _svcNom2, price: price, area: a.area }];
+              slotServices[2] = [{ name: _svcNom2, price: price, area: a.area, lineaId: String(a.lineaId || '') }];
               renderServicesForSlot(2);
               document.getElementById('as2Total').textContent = '$' + price;
               document.getElementById('as2SvcCount').textContent = '1';
@@ -3604,7 +3615,8 @@
                 slotServices[2] = _restauradoP2.lista.map(function(sd){ return {
                   name: sd.servicio || sd.nombre || sd.name || '',
                   price: Number(sd.monto || sd.precio || sd.price || 0),
-                  area: sd.area || myArea2, status: undefined
+                  area: sd.area || myArea2, status: undefined,
+                  lineaId: String(sd.lineaId || '')
                 }; });
                 const _totalModerno2 = slotServices[2].reduce(function(s,v){ return s + Number(v.price||0); }, 0);
                 renderServicesForSlot(2);
@@ -3626,7 +3638,8 @@
                 slotServices[2].push({
                   name: promoFull.name,
                   area: myArea2,
-                  price: myPrice2
+                  price: myPrice2,
+                  lineaId: String(a.lineaId || '')
                 });
 
                 // Actualizar UI
@@ -3823,12 +3836,13 @@
                 slotServices[2] = _r4.lista.map(sd => ({
                   name: sd.servicio || sd.nombre || sd.name || '',
                   price: Number(sd.monto || sd.precio || sd.price || 0),
-                  area: sd.area || a.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true
+                  area: sd.area || a.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true,
+                  lineaId: String(sd.lineaId || '')
                 }));
               } else {
                 let _nm2 = String(a.servicio || '');
                 if (_nm2.trim().startsWith('{')) { try { _nm2 = JSON.parse(_nm2).nombre || _nm2; } catch(e){} }
-                slotServices[2] = [{ name: _nm2, price: Number(a.total || 0), area: a.area || '', _yaEnLinea: true }];
+                slotServices[2] = [{ name: _nm2, price: Number(a.total || 0), area: a.area || '', _yaEnLinea: true, lineaId: String(a.lineaId || '') }];
               }
               renderServicesForSlot(2);
               const _tot2fb = slotServices[2].reduce((s,v) => s + Number(v.price||0), 0);
