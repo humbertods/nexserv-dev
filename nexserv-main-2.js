@@ -2104,7 +2104,11 @@
                 slotServices[1].unshift({
                   name: a1.promoNombre,
                   price: myPrice,
-                  area: myArea
+                  area: myArea,
+                  // Bloque 8C.1 — faltaba acá: si la clienta ya tiene una promo
+                  // en curso y la staff reabre "Aplicar promo" para cambiarla,
+                  // esta es la entrada que slotServices[1][0] expone.
+                  lineaId: String(a1.lineaId || '')
                 });
               }
               activePromos[clientKey1] = {
@@ -2148,7 +2152,11 @@
                   esPromo: !!sd.esPromo,
                   status: 'aprobado',
                   // ya vienen de líneas existentes en LINEAS → no re-sincronizar al ticket
-                  _yaEnLinea: true
+                  _yaEnLinea: true,
+                  // Bloque 8C — identificador exacto de la línea LINEAS de este
+                  // componente (Bloque 8B), para que "Aplicar promo" pueda
+                  // llamar a sustituirServicioPorPromoStaffNativa sin adivinar.
+                  lineaId: String(sd.lineaId || '')
                 });
               });
             } else {
@@ -2157,7 +2165,9 @@
                 slotServices[1].unshift({
                   name: a1.servicio,
                   price: price,
-                  area: a1.area
+                  area: a1.area,
+                  // Bloque 8C — ver nota equivalente en la rama multi-servicio.
+                  lineaId: String(a1.lineaId || '')
                 });
               }
             }
@@ -2178,12 +2188,13 @@
             slotServices[1] = _det1p.map(function(sd){ return {
               name: sd.servicio || sd.nombre || sd.name || '',
               price: Number(sd.monto || sd.precio || sd.price || 0),
-              area: sd.area || a1.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true
+              area: sd.area || a1.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true,
+              lineaId: String(sd.lineaId || '')
             }; });
           } else {
             var _nm1p = String(a1.servicio || '');
             if (_nm1p.trim().indexOf('{') === 0) { try { _nm1p = JSON.parse(_nm1p).nombre || _nm1p; } catch(e){} }
-            slotServices[1] = [{ name: _nm1p, price: Number(a1.total || 0), area: a1.area || '', _yaEnLinea: true }];
+            slotServices[1] = [{ name: _nm1p, price: Number(a1.total || 0), area: a1.area || '', _yaEnLinea: true, lineaId: String(a1.lineaId || '') }];
           }
         }
         renderServicesForSlot(1);
