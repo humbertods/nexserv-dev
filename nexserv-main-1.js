@@ -2546,9 +2546,38 @@
     const _detalleTake = Array.isArray(w.serviciosDetalle) ? w.serviciosDetalle : [];
     if (!_esTM_ && typeof _tieneIdentidadEstableParaSelector_ === 'function'
         && _tieneIdentidadEstableParaSelector_(_detalleTake)) {
-      window._takingSubticketActivo = true;
       const _grupoId = String(w.ticketRef || w.idEspera || w.id || '');
-      window._takingSubticketTicketRef = _grupoId;
+
+      // ── BLOQUE 8C.2 — sin elección real que mostrar: todos los
+      // componentes 'esperando' de este ticket ya son de esta staff. Se
+      // salta el selector (y el modal "¿Tomar esta clienta?" completo) y se
+      // autoinicia directo, reutilizando EXACTAMENTE la misma ruta de envío
+      // que usa una selección manual completa (confirmTake_ → apiPost
+      // tomarClienta → loadClientAfterTake → activeService), para no
+      // duplicar guards, validaciones ni manejo de errores ya certificados.
+      if (typeof _debeAutoiniciarTodosComponentes_ === 'function'
+          && _debeAutoiniciarTodosComponentes_(_detalleTake, user ? user.name : '')) {
+        window._takingSubticketActivo = true;
+        window._takingSubticketTicketRef = _grupoId;
+        window._subticketComponentes = window._subticketComponentes || {};
+        window._subticketSeleccion = window._subticketSeleccion || {};
+        window._subticketComponentes[_grupoId] = {};
+        window._subticketSeleccion[_grupoId] = {};
+
+        const _filasAuto = normalizarComponentesSeleccionables_(_detalleTake, user ? user.name : '');
+        _filasAuto.forEach(function (f) {
+          if (!f.seleccionable) return; // los bloqueados nunca se tocan
+          window._subticketComponentes[_grupoId][f.id] = f.componente;
+          window._subticketSeleccion[_grupoId][f.id] = true;
+        });
+
+        // Nunca se abre takeModal — la única confirmación visible será
+        // "Servicio asignado", más adelante en la misma cadena de confirmTake_.
+        confirmTake();
+        return;
+      }
+
+      window._takingSubticketActivo = true;
       window._subticketComponentes = window._subticketComponentes || {};
       window._subticketSeleccion = window._subticketSeleccion || {};
       window._subticketComponentes[_grupoId] = {};
