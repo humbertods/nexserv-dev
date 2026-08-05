@@ -1853,6 +1853,33 @@
               + '</div>';
           }
 
+          // ── BLOQUE 8C.2 — sin elección real: todos los componentes
+          // 'esperando' de este ticket ya son de esta staff. Se muestra el
+          // mismo botón simple de "Confirmar / Empezar" (con el total
+          // COMPLETO del ticket, _tot, tal como ya lo calcula el resto de
+          // esta función — nunca un total parcial de un solo componente),
+          // en vez del selector de checkboxes. Los mapas de selección se
+          // pre-llenan acá mismo, en el render (sin efecto — no llama al
+          // backend); al tocar el botón, se llama a la MISMA
+          // confirmarSeleccionSubtickets ya certificada, sin duplicar la
+          // ruta de envío.
+          if (_debeAutoiniciarTodosComponentes_(_detalle, user.name)) {
+            const _filasAuto = normalizarComponentesSeleccionables_(_detalle, user.name);
+            window._subticketComponentes[_idEspera] = {};
+            window._subticketSeleccion[_idEspera] = {};
+            _filasAuto.forEach(function (f) {
+              if (!f.seleccionable) return; // los bloqueados nunca se tocan
+              window._subticketComponentes[_idEspera][f.id] = f.componente;
+              window._subticketSeleccion[_idEspera][f.id] = true;
+            });
+            return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
+              + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
+              + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
+              + '<button onclick="confirmarSeleccionSubtickets(\'' + _idEspera + '\',\'' + _cod + '\',\'' + _nom + '\')" '
+              + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
+              + '</div>';
+          }
+
           // ── Selector real de subtickets (Parte B, vía helper compartido
           // Fase 0) ─────────────────────────────────────────────────────
           // Identidad por componente.id (nunca nombre/monto/posición). El
@@ -2344,6 +2371,66 @@
     return true;
   }
   window._tieneIdentidadEstableParaSelector_ = _tieneIdentidadEstableParaSelector_;
+
+  // ══════════════════════════════════════════════════════════════════════
+  // BLOQUE 8C.2 — helper único: ¿corresponde autoiniciar TODOS los
+  // componentes esperando de esta staff, sin mostrar el selector?
+  // ══════════════════════════════════════════════════════════════════════
+  // El selector de subtickets solo tiene sentido cuando existe una ELECCIÓN
+  // real (varias staffs involucradas, o componentes bloqueados mezclados
+  // con seleccionables de otra identidad). Cuando TODOS los componentes en
+  // estado 'esperando' ya pertenecen a la staff actual — sin excepción —
+  // no hay nada que elegir: mostrarle un selector con checkboxes ya
+  // marcados es una confirmación redundante que además, si el cálculo de
+  // "mi total" toma solo la PRIMERA fila en vez de sumar todas, muestra un
+  // total parcial incorrecto (el defecto reportado en DEV).
+  //
+  // Reutiliza la MISMA identidad que normalizarComponentesSeleccionables_ /
+  // _tieneIdentidadEstableParaSelector_: componente.id / lineaId real, NUNCA
+  // nombre, monto o posición. Usada por AMBAS superficies (openTake en
+  // nexserv-main-1.js, "Por empezar" en este archivo) — no se duplica.
+  //
+  // Devuelve true SOLO cuando:
+  //   - hay al menos un componente;
+  //   - TODOS (seleccionables o no) tienen id real y distinto entre sí
+  //     (misma exigencia de identidad completa que el selector real);
+  //   - TODOS los componentes en estado 'esperando' pertenecen a staffActual
+  //     (si hay uno solo de otra staff, false — selector real necesario);
+  //   - hay al menos un componente 'esperando' de staffActual (si no hay
+  //     ninguno pendiente, no hay nada que autoiniciar).
+  // Los componentes bloqueados (en_servicio/completado/anulado/cobrado) de
+  // CUALQUIER staff no impiden el autoinicio — simplemente se ignoran, tal
+  // como pide el Caso C: no se reinician, no se tocan, solo no participan
+  // de la decisión.
+  function _debeAutoiniciarTodosComponentes_(componentes, staffActual) {
+    const lista = Array.isArray(componentes) ? componentes : [];
+    if (lista.length === 0) return false;
+    const staffN = String(staffActual || '').trim();
+    if (!staffN) return false;
+
+    const ids = [];
+    let hayEsperandoPropio = false;
+
+    for (let i = 0; i < lista.length; i++) {
+      const c = lista[i];
+      const cid = (c && c.id !== undefined && c.id !== null) ? String(c.id).trim() : '';
+      if (!cid) return false; // identidad incompleta en cualquier componente → legacy/selector real
+      ids.push(cid);
+      const cStaff = String((c && c.staff) || '').trim();
+      const cEstado = String((c && c.estado) || '').toLowerCase().trim();
+      if (cEstado === 'esperando') {
+        if (cStaff !== staffN) return false; // hay un esperando ajeno → selección real necesaria
+        hayEsperandoPropio = true;
+      }
+      // Cualquier otro estado (en_servicio/completado/anulado/cobrado/
+      // por_verificar) se ignora a propósito: no participa de la decisión,
+      // no se reinicia, no se toca.
+    }
+    if (new Set(ids).size !== ids.length) return false; // ids duplicados → datos inconsistentes, legacy
+
+    return hayEsperandoPropio;
+  }
+  window._debeAutoiniciarTodosComponentes_ = _debeAutoiniciarTodosComponentes_;
 
   // Renderiza el HTML de las filas (checkbox real o bloqueada/informativa)
   // para un grupo de componentes ya normalizados. 'opciones':
