@@ -4610,6 +4610,22 @@
                 }
               }
             }
+            // ── DIAG TEMPORAL — instrumentación de solo lectura, sin cambiar la
+            // fórmula. Retirar una vez cerrado el diagnóstico del ERROR 2.
+            console.log('[DIAG TOTAL EN ATENCION]', {
+              ticketRef: a.idEspera || a.ticket_ref || a.ticketRef,
+              estado: a.estado,
+              fuente: a.fuente,
+              total: a.total,
+              montoTotal: a.monto_total,
+              serviciosDetalle: a.serviciosDetalle,
+              totalDetalle: (a.serviciosDetalle && a.serviciosDetalle.length > 0)
+                ? a.serviciosDetalle.reduce((s, d) => s + Number(d.monto || 0), 0)
+                : null,
+              promoNombre: a.promoNombre,
+              promoPrecioFijo: _promoPrecioFijo,
+              totalAcumDisplay: totalAcumDisplay
+            });
             const totalStr = totalAcumDisplay > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);"><span style="font-size:11px;color:var(--ink-faint);font-weight:600;">TOTAL ACUMULADO</span><span style="font-size:16px;font-weight:800;color:var(--accent-deep);">$${totalAcumDisplay.toFixed(2)}</span></div>` : '';
             const tmBadge = esTM ? ' <span style="font-size:10px;background:var(--accent);color:white;padding:2px 8px;border-radius:100px;font-weight:700;">MULTI</span>' : '';
             const promoStr = a.promoNombre ? `<div style="background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:white;font-size:10px;font-weight:700;padding:3px 10px;border-radius:100px;display:inline-block;margin-bottom:8px;">🏷 ${a.promoNombre}</div>` : '';
