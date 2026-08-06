@@ -58,12 +58,21 @@
     // ----------------------------------------------------------
     // obtenerListaEspera()
     // Devuelve: Promise → array de tickets en espera
-    // Endpoint: getTableroLineas (LINEAS) con fallback getListaEspera (legacy)
+    // Endpoint: getTableroLineas (LINEAS). SIN fallback a getListaEspera
+    // (legacy) — Bloque de protección de fuente: mezclar respuestas
+    // LINEAS + legacy ante una falla de LINEAS es exactamente el riesgo que
+    // este cambio elimina. success=false, excepción o red → la promesa se
+    // rechaza y el caller decide (hoy: refrescarAsignacionesStaff/loadStaffHome
+    // ya hacen .catch(function(){ return []; }) — ante fallo, "Por empezar"
+    // queda vacío en vez de mostrarse desde legacy).
     // ----------------------------------------------------------
     obtenerListaEspera: function() {
       return apiGet('getTableroLineas')
         .then(function(r) {
-          if (!r || !r.success) return apiGet('getListaEspera').then(function(r2){ return r2 && r2.lista ? r2.lista : []; });
+          if (!r || r.success !== true) {
+            throw new Error('[LineaService.obtenerListaEspera] getTableroLineas no exitoso: ' +
+              ((r && (r.error || r.message)) || 'sin detalle'));
+          }
           // FIX nombres de campo: getTableroLineas devuelve { cola, en_servicio,
           // completado, cobrado } — NO { esperando, enServicio, porCobrar }. Antes
           // se leían los nombres equivocados → la lista volvía SIEMPRE vacía.
@@ -74,9 +83,6 @@
             r.completado    || r.porCobrar  || []
           );
           return lista;
-        })
-        .catch(function() {
-          return apiGet('getListaEspera').then(function(r2){ return r2 && r2.lista ? r2.lista : []; });
         });
     },
 
