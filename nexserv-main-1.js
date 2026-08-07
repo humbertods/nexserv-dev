@@ -2545,24 +2545,47 @@
     const _esTM_ = w.id && String(w.id).startsWith('TM-');
     const _detalleTake = Array.isArray(w.serviciosDetalle) ? w.serviciosDetalle : [];
 
-    // ── DIAG TEMPORAL — instrumentación de solo lectura. Retirar al cerrar
-    // el diagnóstico de "toma de promo LINEAS de varios componentes". ──────
-    console.log('[DIAG OPEN TAKE COMPONENTES]', {
-      ticketRef: w.ticketRef || w.idEspera || w.id || '',
-      idEspera: w.idEspera,
-      id: w.id,
-      fuente: w.fuente || '',
-      esTM: _esTM_,
-      staffActual: user ? user.name : '',
-      serviciosDetalleCrudo: w.serviciosDetalle,
-      detalle: _detalleTake,
-      cantidadComponentes: _detalleTake.length,
-      tieneIdentidad: (typeof _tieneIdentidadEstableParaSelector_ === 'function')
-        ? _tieneIdentidadEstableParaSelector_(_detalleTake) : '(helper no disponible)',
-      debeAutoiniciar: (typeof _debeAutoiniciarTodosComponentes_ === 'function')
-        ? _debeAutoiniciarTodosComponentes_(_detalleTake, user ? user.name : '') : '(helper no disponible)'
-    });
+    // ── Bloque 2 Frontend — Tomar clienta LINEAS (autorizado) ───────────────
+    // Ruteo EXPLÍCITO por w.fuente (certificado en backend, nunca inferido
+    // acá por prefijo, forma del detalle, cantidad de componentes ni tipo
+    // TM). La fuente se valida SIEMPRE primero — el prefijo TM- NUNCA puede
+    // sacar un ticket de este chequeo ni del camino LINEAS (corrección:
+    // antes, _esTM_=true saltaba directo a la sección legacy sin pasar por
+    // ninguno de los dos checks de fuente). _esTM_ solo puede decidir una
+    // subruta DESPUÉS de que la fuente ya se confirmó LEGACY (más abajo).
+    // LINEAS: el backend decide qué componentes iniciar — el frontend ya no
+    // arma componentesSeleccionados ni window._subticketComponentes/
+    // _subticketSeleccion/_takingSubticketActivo para este camino. LEGACY:
+    // cae exactamente al comportamiento existente (bloque de selector más
+    // abajo, sin cambios) — conservado temporalmente, incluido TM-. 
+    // DESCONOCIDA: bloquea, cero apiPost, nunca cae a legacy como fallback
+    // implícito — ni siquiera para TM-.
+    const _fuenteTake = String(w.fuente || '').trim().toUpperCase();
+    window._takingTicketRefLineas = '';
 
+    if (_fuenteTake !== 'LINEAS' && _fuenteTake !== 'LEGACY') {
+      alert('⚠️ No se pudo confirmar el origen de este ticket. Avisá a soporte antes de tomarlo.');
+      return;
+    }
+
+    if (_fuenteTake === 'LINEAS') {
+      const _refCanonica = (typeof _refTicketFrontend_ === 'function') ? _refTicketFrontend_(w) : '';
+      if (!_refCanonica) {
+        console.warn('[openTake] REFERENCIA_TICKET_AUSENTE — fuente=LINEAS sin referencia resoluble', w);
+        alert('⚠️ Ticket nativo sin referencia identificable (REFERENCIA_TICKET_AUSENTE). Avisá a soporte antes de tomarlo.');
+        return;
+      }
+      window._takingTicketRefLineas = _refCanonica;
+      if (splitEl) splitEl.style.display = 'none';
+      if (normalEl) normalEl.style.display = 'block';
+      document.getElementById('takeModal').classList.add('active');
+      return;
+    }
+
+    // ── A partir de acá hay certeza: fuente === 'LEGACY'. Recién ahora
+    // _esTM_ puede decidir su subruta histórica — comportamiento existente
+    // sin cambios, incluido el selector de subtickets (compat temporal:
+    // helpers y ruta conservados, no se borra nada). ─────────────────────
     if (!_esTM_ && typeof _tieneIdentidadEstableParaSelector_ === 'function'
         && _tieneIdentidadEstableParaSelector_(_detalleTake)) {
       const _grupoId = String(w.ticketRef || w.idEspera || w.id || '');
@@ -2861,9 +2884,47 @@
       }
     }
 
-    // ── TICKET MULTI: usar endpoint específico (legacy/TM — cierre temprano
-    //    conservado, sin más cambios que la ubicación del closeModal) ──────
-    if (takingId.startsWith('TM-')) {
+    // ── Bloque 2 Frontend — Tomar clienta LINEAS (autorizado) ──────────────
+    // PRIORIDAD: window._takingTicketRefLineas ya fue resuelto por
+    // openTake() a partir de w.fuente — se revisa ANTES que el prefijo TM-
+    // para que un ticket defensivo con id TM- pero fuente=LINEAS (F-L2)
+    // nunca caiga en LineaService.tomarAreaTicket. Reutiliza el estado de
+    // ruteo ya establecido (no se infiere fuente de nuevo por prefijo acá).
+    if (window._takingTicketRefLineas) {
+      // Backend certificado (harness B1-B10, TODOS OK): con ticketRef+staff
+      // y SIN componentesSeleccionados, iniciarComponentesTicketNativoPorRef_
+      // autoselecciona TODAS las líneas elegibles de esta staff — 1, 2 o N,
+      // sin exigir selección. Payload deliberadamente NO incluye la clave
+      // componentesSeleccionados (ausente ≠ [] — el backend trata [] como
+      // SELECCION_VACIA, así que omitirla es obligatorio, no cosmético).
+      const _refLineas = window._takingTicketRefLineas;
+      let resultLineas;
+      try {
+        resultLineas = await apiPost('tomarClienta', {
+          idEspera:    _refLineas,
+          chicaNombre: name
+        }, { retries: 0, timeoutMs: 15000 });
+      } catch (err) {
+        console.error('Error al tomar clienta (LINEAS):', err);
+        alert('Error al tomar la clienta. Intentá de nuevo.');
+        return; // modal permanece abierto, sin escritura confirmada
+      }
+      if (!resultLineas || resultLineas.success !== true) {
+        const msg = (resultLineas && resultLineas.message) || 'No se pudo iniciar el servicio.';
+        alert(msg);
+        return; // modal permanece abierto — ningún componentesSeleccionados
+                 // que reintentar: el backend ya decide todo con el mismo
+                 // payload en un nuevo intento.
+      }
+      closeModal();
+      const _nIniciadas = (resultLineas.iniciadas && resultLineas.iniciadas.length) || 0;
+      simulateNotif('mikaela', name + ' tomó ' + _nIniciadas
+        + ' servicio' + (_nIniciadas === 1 ? '' : 's')
+        + ' de ' + (window._takingClientCode || 'una clienta'), 'Lista de espera · ahora', false);
+      window._takingTicketRefLineas = '';
+    } else if (takingId.startsWith('TM-')) {
+      // ── TICKET MULTI: usar endpoint específico (legacy/TM — cierre temprano
+      //    conservado, sin más cambios que la ubicación del closeModal) ──────
       closeModal();
       try {
         const result = await LineaService.tomarAreaTicket({
