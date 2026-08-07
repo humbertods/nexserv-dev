@@ -14,21 +14,54 @@
   const ENV = 'dev';
   const API_URL = 'https://script.google.com/macros/s/AKfycbwbCYRXduTSyVSmX7yDSkgLD_5sqW3wWrWP4AkNC0blCGHn2RYASyT2rucTsAJWWtKuQQ/exec';
 
+  // ── Separación DEV/PROD (Bloque separación de entornos) ──────────────────
+  // ENV ya estaba correctamente fijo a 'dev' arriba (backend nunca dependió
+  // de ?env=dev — ver comentario original). Esto formaliza esa identidad en
+  // un contrato explícito que otros archivos (y humanos revisando Network/
+  // Console) pueden verificar en runtime, sin adivinar por querystring.
+  window.NEXSERV_ENV = 'DEV';
+  // Ruta base derivada de la ubicación real de la página — nunca hardcodeada
+  // a "/nexserv-dev/" ni ninguna otra carpeta específica, para que este
+  // mismo archivo siga siendo correcto sin importar dónde termine publicado
+  // este entorno.
+  window.NEXSERV_BASE_PATH = location.pathname.substring(0, location.pathname.lastIndexOf('/') + 1);
+  window.NEXSERV_BUILD = {
+    env: window.NEXSERV_ENV,
+    basePath: window.NEXSERV_BASE_PATH,
+    version: 'dev-' // completado abajo, después de declarar APP_VERSION (TDZ)
+  };
+  console.log('[NexServ ENV] ' + window.NEXSERV_ENV);
+
+  // Guard de detección de entorno híbrido — NO bloquea, solo avisa fuerte
+  // en consola. Loose match ("dev" en la ruta) porque no conocemos con
+  // certeza el nombre final de la carpeta de publicación; localhost queda
+  // exento (desarrollo local legítimo).
+  if (window.NEXSERV_ENV === 'DEV'
+      && !/dev/i.test(window.NEXSERV_BASE_PATH)
+      && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+    console.error('[NexServ ENV MISMATCH] Frontend identificado como DEV pero la ruta ("'
+      + window.NEXSERV_BASE_PATH + '") no contiene "dev". Verificar que no se esté sirviendo '
+      + 'este build de DEV desde la carpeta de PROD.');
+  }
+
   // ── Versión de la app (debe coincidir con APP_VERSION del backend) ──
   // Subila en cada cambio que despliegues a GitHub Pages. Al abrir, la app
   // le pregunta al servidor su versión; si la del servidor es distinta,
   // muestra un aviso para recargar (cura el problema de caché vieja).
   const APP_VERSION = '5.3';
+  window.NEXSERV_BUILD.version = 'dev-' + APP_VERSION;
 
-  // Sello visual rojo "DEV": este frontend es exclusivamente DEV, así que
-  // se muestra siempre, sin depender de ENV === 'dev'.
+  // Sello visual rojo "DEV": deriva explícitamente de window.NEXSERV_ENV,
+  // nunca de ?env=dev (que no tiene ningún efecto en este proyecto).
   try {
-    document.addEventListener('DOMContentLoaded', function () {
-      var b = document.createElement('div');
-      b.textContent = 'DEV';
-      b.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;background:#b91c1c;color:#fff;font:700 11px sans-serif;padding:2px 8px;border-bottom-right-radius:6px;letter-spacing:1px;pointer-events:none;';
-      document.body.appendChild(b);
-    });
+    if (window.NEXSERV_ENV === 'DEV') {
+      document.addEventListener('DOMContentLoaded', function () {
+        var b = document.createElement('div');
+        b.textContent = 'DEV';
+        b.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;background:#b91c1c;color:#fff;font:700 11px sans-serif;padding:2px 8px;border-bottom-right-radius:6px;letter-spacing:1px;pointer-events:none;';
+        document.body.appendChild(b);
+      });
+    }
   } catch (e) {}
 
   // Etiqueta discreta de versión (abajo a la derecha) + chequeo de actualización.
@@ -75,8 +108,12 @@
         navigator.serviceWorker.getRegistrations().then(function (regs) {
           regs.forEach(function (reg) { reg.update(); });
           if (window.caches && caches.keys) {
-            caches.keys().then(function (ks) { ks.forEach(function (k) { caches.delete(k); }); })
-              .finally(function () { location.reload(true); });
+            // ESTRICTO: solo nexserv-dev-*. Nunca nexserv-prod-* ni ninguna
+            // otra cache del origen — caches.delete(k) sin filtro borraría
+            // todo humbertods.github.io, PROD incluido.
+            caches.keys().then(function (ks) {
+              ks.forEach(function (k) { if (k.startsWith('nexserv-dev-')) caches.delete(k); });
+            }).finally(function () { location.reload(true); });
           } else { location.reload(true); }
         }).catch(function () { location.reload(true); });
       } else { location.reload(true); }
