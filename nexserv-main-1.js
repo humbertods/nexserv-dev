@@ -2544,6 +2544,25 @@
     // sin identidad completa: cae exactamente al comportamiento anterior.
     const _esTM_ = w.id && String(w.id).startsWith('TM-');
     const _detalleTake = Array.isArray(w.serviciosDetalle) ? w.serviciosDetalle : [];
+
+    // ── DIAG TEMPORAL — instrumentación de solo lectura. Retirar al cerrar
+    // el diagnóstico de "toma de promo LINEAS de varios componentes". ──────
+    console.log('[DIAG OPEN TAKE COMPONENTES]', {
+      ticketRef: w.ticketRef || w.idEspera || w.id || '',
+      idEspera: w.idEspera,
+      id: w.id,
+      fuente: w.fuente || '',
+      esTM: _esTM_,
+      staffActual: user ? user.name : '',
+      serviciosDetalleCrudo: w.serviciosDetalle,
+      detalle: _detalleTake,
+      cantidadComponentes: _detalleTake.length,
+      tieneIdentidad: (typeof _tieneIdentidadEstableParaSelector_ === 'function')
+        ? _tieneIdentidadEstableParaSelector_(_detalleTake) : '(helper no disponible)',
+      debeAutoiniciar: (typeof _debeAutoiniciarTodosComponentes_ === 'function')
+        ? _debeAutoiniciarTodosComponentes_(_detalleTake, user ? user.name : '') : '(helper no disponible)'
+    });
+
     if (!_esTM_ && typeof _tieneIdentidadEstableParaSelector_ === 'function'
         && _tieneIdentidadEstableParaSelector_(_detalleTake)) {
       const _grupoId = String(w.ticketRef || w.idEspera || w.id || '');
@@ -2947,6 +2966,15 @@
     const _btnLegacyTxtOrig = _btnLegacy ? _btnLegacy.textContent : '';
     if (_btnLegacy) { _btnLegacy.disabled = true; _btnLegacy.textContent = 'Procesando...'; }
     let resultLegacy;
+    // ── DIAG TEMPORAL — instrumentación de solo lectura. Retirar al cerrar
+    // el diagnóstico. Confirma que esta rama (sin componentesSeleccionados)
+    // es la que efectivamente se ejecuta para el ticket problemático. ──────
+    console.log('[DIAG CONFIRM TAKE PAYLOAD LEGACY]', {
+      rama: 'legacy (window._takingSubticketActivo era false)',
+      takingId: window._takingId,
+      takingData: window._takingData,
+      payload: { idListaEspera: window._takingId, chicaNombre: name }
+    });
     try {
       // FASE 1 ACOTADA (DEV) Parte E — sin reintento automático (no idempotente).
       resultLegacy = await apiPost('tomarClienta', {
