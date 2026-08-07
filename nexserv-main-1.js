@@ -980,6 +980,72 @@
     }
   }
 
+  // ── Bloque 2 — Promo parcial LINEAS: finalización nativa por lineaId ──────
+  // Reemplaza, para fuente=LINEAS, lo que finishAndSendPartial/
+  // compartirSiguienteServicio hacen para LEGACY. NUNCA llama a
+  // continuarPromoALista, finishAndSendPartial, compartirSiguienteServicio
+  // ni LineaService.crearServicio. Lee el estado real de LINEAS (nunca
+  // activePromos/slotServices/catálogo PROMOS/nombres de área) para decidir
+  // si quedan líneas esperando de otra staff.
+  async function finalizarMisComponentesLineas_(ticketRef, staff) {
+    const ref = String(ticketRef || '').trim();
+    const staffN = String(staff || '').trim();
+    if (!ref || !staffN) return { success: false, error: 'DATOS_INSUFICIENTES' };
+
+    // 1) Lectura fresca de LINEAS — fuente de verdad exclusiva.
+    let lineasReal;
+    try {
+      lineasReal = await apiGet('getTicketLineas', { ticketRef: ref });
+    } catch (e) {
+      return { success: false, error: 'ERROR_LECTURA_LINEAS', message: String(e) };
+    }
+    if (!lineasReal || lineasReal.success !== true) {
+      return { success: false, error: (lineasReal && lineasReal.error) || 'ERROR_LECTURA_LINEAS' };
+    }
+    const todasLasLineas = Array.isArray(lineasReal.lineasActivas) ? lineasReal.lineasActivas : [];
+
+    // 2) Mis lineaId activos (en_servicio, asignados a mí) — identidad
+    // exclusiva por id, nunca por nombre/área.
+    const misLineaIds = todasLasLineas
+      .filter(function (l) {
+        return String(l.estado || '').trim() === 'en_servicio'
+          && String(l.staff || '').trim().toLowerCase() === staffN.toLowerCase();
+      })
+      .map(function (l) { return l.id || l.lineaId; })
+      .filter(Boolean);
+
+    if (misLineaIds.length === 0) {
+      return { success: false, error: 'SIN_COMPONENTES_ACTIVOS_PROPIOS', ticket_ref: ref };
+    }
+
+    // 3) Finalizar únicamente mis lineaId — motor LINEAS nativo certificado.
+    let resultFin;
+    try {
+      resultFin = await LineaService.finalizarComponentes({
+        ticketRef: ref, staff: staffN, lineaIds: misLineaIds
+      });
+    } catch (e) {
+      return { success: false, error: 'ERROR_FINALIZAR', message: String(e) };
+    }
+    if (!resultFin || resultFin.success !== true) {
+      return { success: false, error: (resultFin && resultFin.error) || 'ERROR_FINALIZAR', detalle: resultFin };
+    }
+
+    // 4) Releer LINEAS para saber si queda algo esperando (otra staff) —
+    // nunca inferido de activePromos/slotServices.
+    let quedanPendientes = false;
+    try {
+      const post = await apiGet('getTicketLineas', { ticketRef: ref });
+      const lineasPost = Array.isArray(post && post.lineasActivas) ? post.lineasActivas : [];
+      quedanPendientes = lineasPost.some(function (l) {
+        return String(l.estado || '').trim() === 'esperando' || String(l.estado || '').trim() === 'en_servicio';
+      });
+    } catch (e) { /* si falla la relectura, tratamos como incierto → no cerrar solo */ quedanPendientes = true; }
+
+    return { success: true, ticket_ref: ref, completadas: resultFin.completadas, quedanPendientes: quedanPendientes };
+  }
+  window.finalizarMisComponentesLineas_ = finalizarMisComponentesLineas_;
+
   // Cuando la staff hizo su parte (1er servicio) y el resto va a otra staff
   async function finishAndSendPartial() {
     closeModal();
@@ -2594,6 +2660,46 @@
         return;
       }
       window._takingTicketRefLineas = _refCanonica;
+      window._takingLineasSeleccion = null; // se llena solo si se usa el selector (ver abajo)
+
+      // ── Bloque 2 — Promo parcial LINEAS: selector de componentes ──────────
+      // 2+ componentes con id real → reutiliza el CONTENEDOR VISUAL ya
+      // existente (#takeDepiSplit/#takeDepiItems, index.html) — NUNCA su
+      // callback/ruta legacy (confirmTakeDepi/confirmTakeDepiAll llevan un
+      // guard nuevo más abajo que corta a la lógica LINEAS antes de tocar
+      // nada legacy). window._depiItems reutiliza renderDepiItems() tal
+      // cual (genérica, solo lee nombre/precio/checked/readonly/completado)
+      // — se le agrega _lineaId, un campo propio que esa función ignora.
+      // Identidad exclusiva: d.id (lineaId real de LINEAS), nunca nombre.
+      if (_detalleTake.length > 1) {
+        window._depiItems = _detalleTake.map(function (d) {
+          return {
+            nombre: d.servicio || d.area || 'Servicio',
+            precio: Number(d.monto || 0),
+            checked: true, // por defecto: todos seleccionados (equivalente a "hacer todo")
+            readonly: false,
+            completado: false,
+            _lineaId: d.id || d.lineaId || ''
+          };
+        }).filter(function (i) { return i._lineaId; }); // nunca un item sin id real
+
+        if (window._depiItems.length !== _detalleTake.length) {
+          console.warn('[openTake] Algún componente LINEAS llegó sin id — excluido del selector', _detalleTake);
+        }
+        if (window._depiItems.length === 0) {
+          alert('⚠️ Ticket nativo sin componentes identificables (REFERENCIA_TICKET_AUSENTE). Avisá a soporte antes de tomarlo.');
+          return;
+        }
+
+        if (splitEl) splitEl.style.display = 'block';
+        if (normalEl) normalEl.style.display = 'none';
+        if (typeof renderDepiItems === 'function') renderDepiItems();
+        document.getElementById('takeModal').classList.add('active');
+        return;
+      }
+
+      // 1 sola línea con id real (o 0) → comportamiento actual sin cambios,
+      // sin selector (V8/P12).
       if (splitEl) splitEl.style.display = 'none';
       if (normalEl) normalEl.style.display = 'block';
       document.getElementById('takeModal').classList.add('active');
@@ -2840,6 +2946,17 @@
   }
 
   async function confirmTakeDepiAll() {
+    // ── Bloque 2 — Promo parcial LINEAS ─────────────────────────────────────
+    // Guard: si esta toma es LINEAS (seteado únicamente por la rama LINEAS
+    // de openTake), usar la lógica nueva y cortar ANTES de tocar cualquier
+    // línea de la lógica legacy de abajo. Identidad por _lineaId, nunca
+    // por nombre/posición.
+    if (window._takingTicketRefLineas) {
+      window._takingLineasSeleccion = (window._depiItems || [])
+        .map(function (i) { return i._lineaId; }).filter(Boolean);
+      await confirmTake();
+      return;
+    }
     // La staff hace todo el servicio pendiente — flujo normal
     window._depiItems = (window._depiItems || []).map(i => ({
       ...i,
@@ -2849,6 +2966,19 @@
   }
 
   async function confirmTakeDepi() {
+    // ── Bloque 2 — Promo parcial LINEAS ─────────────────────────────────────
+    if (window._takingTicketRefLineas) {
+      const seleccionados = (window._depiItems || [])
+        .filter(function (i) { return i.checked; })
+        .map(function (i) { return i._lineaId; }).filter(Boolean);
+      if (seleccionados.length === 0) {
+        alert('Seleccioná al menos un servicio para hacer vos.');
+        return; // bloqueo frontend — cero apiPost (P7)
+      }
+      window._takingLineasSeleccion = seleccionados;
+      await confirmTake();
+      return;
+    }
     const items = window._depiItems || [];
     // Ignorar items readonly (ya completados) — solo procesar los pendientes
     const itemsPendientes = items.filter(i => !i.readonly && !i.completado);
@@ -2916,12 +3046,17 @@
       // componentesSeleccionados (ausente ≠ [] — el backend trata [] como
       // SELECCION_VACIA, así que omitirla es obligatorio, no cosmético).
       const _refLineas = window._takingTicketRefLineas;
+      // componentesSeleccionados sigue OPCIONAL: solo se incluye si el
+      // selector (2+ componentes) se usó realmente. Para 1 sola línea,
+      // window._takingLineasSeleccion nunca se pobló — payload idéntico
+      // al de antes de este bloque (P12, sin regresión).
+      const _payloadLineas = { idEspera: _refLineas, chicaNombre: name };
+      if (Array.isArray(window._takingLineasSeleccion) && window._takingLineasSeleccion.length > 0) {
+        _payloadLineas.componentesSeleccionados = window._takingLineasSeleccion;
+      }
       let resultLineas;
       try {
-        resultLineas = await apiPost('tomarClienta', {
-          idEspera:    _refLineas,
-          chicaNombre: name
-        }, { retries: 0, timeoutMs: 15000 });
+        resultLineas = await apiPost('tomarClienta', _payloadLineas, { retries: 0, timeoutMs: 15000 });
       } catch (err) {
         console.error('Error al tomar clienta (LINEAS):', err);
         alert('Error al tomar la clienta. Intentá de nuevo.');
@@ -2940,6 +3075,7 @@
         + ' servicio' + (_nIniciadas === 1 ? '' : 's')
         + ' de ' + (window._takingClientCode || 'una clienta'), 'Lista de espera · ahora', false);
       window._takingTicketRefLineas = '';
+      window._takingLineasSeleccion = null;
     } else if (takingId.startsWith('TM-')) {
       // ── TICKET MULTI: usar endpoint específico (legacy/TM — cierre temprano
       //    conservado, sin más cambios que la ubicación del closeModal) ──────
