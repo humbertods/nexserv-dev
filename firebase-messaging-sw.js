@@ -3,12 +3,16 @@
    Versión ROBUSTA: NO descarga la librería de Firebase por internet
    (eso fallaba con importScripts y rompía el SW). Maneja el evento
    'push' nativo directamente, así no puede fallar por ese motivo.
-   Subir a la RAÍZ del sitio:
-     https://humbertods.github.io/nexserv/firebase-messaging-sw.js
+   Subir a la RAÍZ del sitio donde se publique este entorno
+   (self.location abajo resuelve la URL real automáticamente —
+   no hace falta editar esta ruta al promover DEV → PROD).
    ════════════════════════════════════════════════════════════════ */
 
-const NEX_URL  = 'https://humbertods.github.io/nexserv/';
-const NEX_ICON = 'https://humbertods.github.io/nexserv/icon-192x192.png';
+// Derivado de la propia ubicación del SW — nunca hardcodeado. Un Service
+// Worker no tiene acceso a window/NEXSERV_BASE_PATH; self.location sí, y
+// siempre apunta a dónde este archivo realmente vive.
+const NEX_URL  = self.location.href.replace(/firebase-messaging-sw\.js$/, '');
+const NEX_ICON = NEX_URL + 'icon-192x192.png';
 
 self.addEventListener('install', function () { self.skipWaiting(); });
 self.addEventListener('activate', function (event) { event.waitUntil(self.clients.claim()); });
@@ -49,8 +53,12 @@ self.addEventListener('notificationclick', function (event) {
   const link = (event.notification.data && event.notification.data.link) || NEX_URL;
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (lista) {
+      // Enfocar SOLO clientes que pertenecen a este mismo scope/base
+      // (NEX_URL, derivado de self.location arriba) — nunca un substring
+      // como "/nexserv" que también matchea "/nexserv-dev/" y podría
+      // enfocar una pestaña del otro entorno.
       for (const c of lista) {
-        if (c.url.indexOf('/nexserv') !== -1 && 'focus' in c) return c.focus();
+        if (c.url.indexOf(NEX_URL) === 0 && 'focus' in c) return c.focus();
       }
       if (clients.openWindow) return clients.openWindow(link);
     })
