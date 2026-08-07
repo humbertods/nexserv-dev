@@ -197,6 +197,16 @@
     },
 
     // ----------------------------------------------------------
+    // finalizarComponentes({ ticketRef, staff, lineaIds })
+    // Bloque 2 — Promo parcial LINEAS. Finaliza únicamente los lineaIds
+    // indicados (deben pertenecer a ticketRef y estar asignados a staff).
+    // Devuelve: Promise → { success, ticket_ref, completadas, errores }
+    // ----------------------------------------------------------
+    finalizarComponentes: function (opts) {
+      return apiPost('finalizarComponentesStaff', opts);
+    },
+
+    // ----------------------------------------------------------
     // asignarServicio({ codigo, servicio, area, precio, chica, observaciones })
     // Devuelve: Promise → { success, ... }
     // ----------------------------------------------------------
