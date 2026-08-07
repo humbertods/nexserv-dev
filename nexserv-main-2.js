@@ -1797,6 +1797,7 @@
     if (promoRef) return promoRef.split(':')[0];
     return '';
   }
+  window._refTicketFrontend_ = _refTicketFrontend_;
 
   function _renderPorEmpezarDesdeListaEspera_(listaEspera, user) {
     try {
