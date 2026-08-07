@@ -2498,6 +2498,21 @@
     }).join('');
   }
 
+  // ── Bloque protección de fuente — normalización de alias históricos ─────
+  // getListaEspera (vía _agregarTicketsNativosDesdeLineas_, backend) puede
+  // devolver "LineasNativo" como fuente para tickets del overlay nativo —
+  // un alias histórico previo al contrato canónico LINEAS/LEGACY. Este
+  // helper es la ÚNICA normalización permitida: lista cerrada de valores
+  // exactos, nunca includes()/startsWith()/regex permisivo. Cualquier valor
+  // no listado explícitamente cae a '' (fail-closed) — nunca se adivina.
+  function normalizarFuenteTake_(fuente) {
+    const f = String(fuente || '').trim().toUpperCase();
+    if (f === 'LINEAS') return 'LINEAS';
+    if (f === 'LINEASNATIVO') return 'LINEAS';
+    if (f === 'LEGACY') return 'LEGACY';
+    return '';
+  }
+
   function openTake(idx) {
     const w = window._waitListData[idx];
     if (!w) { alert('Error: no se encontró la clienta'); return; }
@@ -2560,7 +2575,10 @@
     // abajo, sin cambios) — conservado temporalmente, incluido TM-. 
     // DESCONOCIDA: bloquea, cero apiPost, nunca cae a legacy como fallback
     // implícito — ni siquiera para TM-.
-    const _fuenteTake = String(w.fuente || '').trim().toUpperCase();
+    // fuente cruda de w.fuente normalizada por normalizarFuenteTake_
+    // (única función de normalización — acepta LINEAS, LINEASNATIVO como
+    // alias de LINEAS, y LEGACY; cualquier otra cosa cae a '' = bloqueo).
+    const _fuenteTake = normalizarFuenteTake_(w.fuente);
     window._takingTicketRefLineas = '';
 
     if (_fuenteTake !== 'LINEAS' && _fuenteTake !== 'LEGACY') {
