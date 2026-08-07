@@ -16,18 +16,21 @@ if ('serviceWorker' in navigator) {
     });
   });
 
-  // Limpiar cachés que no sean el actual
+  // Limpiar cachés viejas de ESTE entorno únicamente. caches.keys()/delete()
+  // operan a nivel de origen completo (no de ruta) — si DEV y PROD llegaran
+  // a compartir dominio, esta limpieza NUNCA debe tocar una caché que no
+  // empiece con "nexserv-dev-" (evita borrar caché de otro entorno).
   if ('caches' in window) {
     caches.keys().then(keys => {
       keys.forEach(key => {
-        if (!key.includes('firebase') && !key.includes('nexserv-v20260706')) {
+        if (key.startsWith('nexserv-dev-') && !key.includes('nexserv-dev-v20260706')) {
           caches.delete(key);
         }
       });
     });
   }
 
-  navigator.serviceWorker.register('/nexserv/sw.js', { scope: '/nexserv/' })
+  navigator.serviceWorker.register('./sw.js', { scope: './' })
     .then(reg => {
       window._swReg = reg;
       console.log('[NexServ] SW registrado:', reg.scope);
