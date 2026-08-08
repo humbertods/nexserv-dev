@@ -2481,6 +2481,15 @@
     // en un reemplazo dentro del mismo ticket (debe ir SIEMPRE a autorización de Mikaela).
     window._modoEnganche = false;
     window._editEngancheIdx = undefined;
+    // P4-FE — cancelación explícita del modal "+ Servicio Extra": se descarta
+    // la intención completa (ticket + lineRequestId + lineaPadre). Una nueva
+    // apertura genera una identidad nueva. En ÉXITO la limpieza ya ocurrió
+    // antes de llamar acá, así que esto es idempotente.
+    if (typeof window._limpiarCtxServicioExtra_ === 'function') {
+      window._limpiarCtxServicioExtra_();
+    } else {
+      window._extraTicketId = null; window._extraLineRequestId = null; window._extraLineaPadre = null;
+    }
     // Limpiar botones dinámicos del modal de finalización para evitar duplicados
     // Restaurar título del cobrarModal por si fue cobro grupal
     const modalTitleEl = document.querySelector('#cobrarModal .modal-title');
