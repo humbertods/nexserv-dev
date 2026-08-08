@@ -2774,8 +2774,47 @@
 
   // === ASIGNAR SERVICIOS/PROMOS (Mikaela) ===
   
+  // ── P4-FE — identidad de operación para "+ Servicio Extra" ────────────────
+  // Genera UN lineRequestId por apertura/intención. Formato exigido por
+  // _lnValidarLineRequestId_ (NexServ_Lineas.gs): [A-Za-z0-9_-], ≤128 chars.
+  // NO deriva del contenido (ticket+servicio+precio+staff): dos extras
+  // legítimamente idénticos deben poder coexistir, así que cada apertura
+  // produce un ID nuevo. NO usa solo timestamp: dos aperturas en el mismo ms
+  // colisionarían.
+  function _nuevoExtraLineRequestId_() {
+    var raw = '';
+    try {
+      if (typeof crypto !== 'undefined' && crypto && typeof crypto.randomUUID === 'function') {
+        raw = crypto.randomUUID().replace(/-/g, '');
+      }
+    } catch (e) { raw = ''; }
+    if (!raw) {
+      raw = Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+          + Math.random().toString(36).slice(2, 10);
+    }
+    var id = ('EXTRA_' + raw).replace(/[^A-Za-z0-9_-]/g, '');
+    return id.slice(0, 128);
+  }
+
+  // Limpieza del contexto de "+ Servicio Extra". Se llama en éxito definitivo
+  // y en cierre/cancelación del modal — NUNCA ante error de backend, porque
+  // un retry de la MISMA intención debe conservar el mismo lineRequestId.
+  function _limpiarCtxServicioExtra_() {
+    window._extraTicketId       = null;
+    window._extraLineRequestId  = null;
+    window._extraLineaPadre     = null;
+  }
+  window._limpiarCtxServicioExtra_ = _limpiarCtxServicioExtra_;
+
   function openAssignServiceModal(clientCode, clientName, extraTicketId) {
     window._extraTicketId = extraTicketId || null;
+    // Nueva intención → nueva identidad de operación. Se crea UNA sola vez
+    // acá; confirmAssignService la lee sin regenerarla.
+    // lineaPadre: desde este card (clientas completadas / por_verificar) no
+    // existen candidatas válidas — el contrato del backend admite '' para
+    // tickets NO TM. No se infiere ninguna línea. Ver decisión C1.
+    window._extraLineRequestId = window._extraTicketId ? _nuevoExtraLineRequestId_() : null;
+    window._extraLineaPadre    = '';
     window._assigningClient = { code: clientCode, name: clientName };
     document.getElementById('assignSvcClientName').textContent = clientName;
     document.getElementById('assignSvcArea').value = '';
@@ -2853,20 +2892,40 @@
       // ── Modo "+ Servicio Extra": agregar al ticket existente ──
       if (window._extraTicketId) {
         const idEx = window._extraTicketId;
+
+        // TM — FAIL CLOSED. El backend exige lineaPadre SIEMPRE para TM-
+        // (LINEA_PADRE_REQUERIDA_TM). Desde este card (clientas completadas)
+        // no hay candidatas en estado 'esperando'/'en_servicio', así que no
+        // se puede resolver. NO se infiere padre por servicio, staff, área,
+        // precio ni posición: se bloquea antes del POST.
+        if (String(idEx).indexOf('TM-') === 0) {
+          alert('No se puede agregar este servicio extra desde esta vista porque el ticket requiere identificar el servicio de origen.');
+          return; // modal abierto y contexto intacto
+        }
+
+        // Identidad de operación: se REUSA la generada al abrir el modal.
+        // Nunca se regenera acá — un retry debe conservar el mismo ID.
+        const rqEx = window._extraLineRequestId || '';
+        const padreEx = window._extraLineaPadre || '';
         try {
           const rEx = await apiPost('agregarServicioExtra', {
-            idEspera: idEx, area: svc.area, servicio: svc.name, precio: svc.price, chica: chica
+            idEspera: idEx, area: svc.area, servicio: svc.name, precio: svc.price, chica: chica,
+            lineRequestId: rqEx, lineaPadre: padreEx
           });
-          window._extraTicketId = null;
           if (rEx && rEx.success) {
+            // Éxito definitivo → recién acá se limpia el contexto.
+            _limpiarCtxServicioExtra_();
             if (typeof showToast === 'function') showToast('✓ Servicio extra agregado para ' + (client ? client.name : 'la clienta'));
             closeModal();
             loadMikaelaHome();
           } else {
+            // Error de backend: NO se limpia nada — el reintento de esta
+            // misma intención debe viajar con el MISMO lineRequestId (y
+            // seguir en modo extra, no caer a asignación normal).
             alert(((rEx && (rEx.message || rEx.error)) || 'No se pudo agregar el servicio extra'));
           }
         } catch (err) {
-          window._extraTicketId = null;
+          // Igual que arriba: fallo de red no invalida la intención.
           console.error(err);
           alert('Error al agregar servicio extra');
         }
@@ -3870,17 +3929,61 @@
               const badgeColor = esPendConf ? 'var(--warning, #f59e0b)' : 'var(--info)';
               const badgeBg = esPendConf ? '#fff8e1' : 'var(--info-bg)';
               const badgeLabel = esPendConf ? '⏳ CONFIRMANDO' : 'EN CURSO';
-              // Ticket madre con varios subtickets → listar cada servicio en su
-              // renglón (antes se concatenaban en una sola línea: "A + B + C + D").
-              const _subticketsHTML = (a.serviciosDetalle && a.serviciosDetalle.length > 1)
-                ? a.serviciosDetalle.map(d => `<div style="font-size:11px;color:var(--ink-soft);">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong></div>`).join('')
-                : `<div style="font-size:11px;color:var(--ink-soft);">${servicioLimpio}</div>`;
+              // ── P3 — BADGE DE ESTADO POR LÍNEA ────────────────────────────
+              // Cada componente de serviciosDetalle tiene su propio `estado`
+              // real de LINEAS. Antes se listaban los renglones pero el badge
+              // era UNO SOLO fuera del loop, heredado del estado del grupo —
+              // por eso dos líneas con estados distintos se veían iguales.
+              // El estado sale EXCLUSIVAMENTE de d.estado; nunca del estado
+              // del ticket, del grupo, de la primera línea, de staff ni de
+              // promoNombre.
+              // Los badges son etiquetas informativas: sin onclick, sin
+              // cursor:pointer, sin handlers de promo. No son botones.
+              const _P3_BADGES = {
+                esperando:     { txt: 'EN ESPERA',  bg: 'var(--warning-bg)', col: 'var(--warning)' },
+                en_servicio:   { txt: 'EN CURSO',   bg: 'var(--info-bg)',    col: 'var(--info)' },
+                por_verificar: { txt: 'COMPLETADO', bg: 'var(--success-bg)', col: 'var(--success)' },
+                completado:    { txt: 'COMPLETADO', bg: 'var(--success-bg)', col: 'var(--success)' },
+                cobrado:       { txt: 'COBRADO',    bg: 'var(--success-bg)', col: 'var(--success)' }
+              };
+              // "Moderno" = al menos un componente trae `estado` propio. Mismo
+              // criterio que _serviciosDetalleActivosParaStaff_ usa en el panel
+              // de staff — no se introduce una segunda definición.
+              const _detP3 = Array.isArray(a.serviciosDetalle) ? a.serviciosDetalle : [];
+              const _esModernoP3 = _detP3.some(d => String((d && d.estado) || '').trim() !== '');
+              // 'anulado' no es un componente operativo: no se lista ni suma.
+              const _detOperativosP3 = _esModernoP3
+                ? _detP3.filter(d => String(d.estado || '').trim().toLowerCase() !== 'anulado')
+                : _detP3;
+
+              let _subticketsHTML;
+              if (_esModernoP3 && _detOperativosP3.length > 0) {
+                _subticketsHTML = _detOperativosP3.map(d => {
+                  const _est = String(d.estado || '').trim().toLowerCase();
+                  const _b = _P3_BADGES[_est] || { txt: String(d.estado || '—').toUpperCase(), bg: 'var(--bg)', col: 'var(--ink-faint)' };
+                  return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--ink-soft);padding:2px 0;">`
+                    + `<span>• ${d.servicio} · <strong>$${Number(d.monto || 0)}</strong></span>`
+                    + `<span style="font-size:9px;font-weight:700;background:${_b.bg};color:${_b.col};padding:2px 7px;border-radius:100px;flex-shrink:0;">${_b.txt}</span>`
+                    + `</div>`;
+                }).join('');
+              } else {
+                // Legacy / sin desglose moderno: comportamiento previo EXACTO.
+                _subticketsHTML = (_detP3.length > 1)
+                  ? _detP3.map(d => `<div style="font-size:11px;color:var(--ink-soft);">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong></div>`).join('')
+                  : `<div style="font-size:11px;color:var(--ink-soft);">${servicioLimpio}</div>`;
+              }
+              // Con desglose moderno el badge pertenece a CADA línea, así que
+              // el badge de grupo no se emite (sería un estado agregado que no
+              // representa a ninguna línea en particular).
+              const _badgeGrupoHTML = _esModernoP3 && _detOperativosP3.length > 0
+                ? ''
+                : `<div style="font-size:10px;font-weight:700;background:${badgeBg};color:${badgeColor};padding:3px 8px;border-radius:100px;animation:pulse 2s infinite;">${badgeLabel}</div>`;
               timelineHTML += `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;">
                 <div style="width:28px;height:28px;border-radius:50%;background:${badgeBg};border:2px solid ${badgeColor};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;animation:pulse 2s infinite;">${iconActual}</div>
                 <div style="flex:1;"><div style="font-size:12px;font-weight:800;color:${badgeColor};">${labelActual} · ${a.tomadaPor}</div>
                 ${_subticketsHTML}
                 <div style="font-size:10px;color:var(--ink-faint);">Desde ${a.horaToma || '?'}${esPendConf?' · Esperando confirmación':''}</div></div>
-                <div style="font-size:10px;font-weight:700;background:${badgeBg};color:${badgeColor};padding:3px 8px;border-radius:100px;animation:pulse 2s infinite;">${badgeLabel}</div></div>`;
+                ${_badgeGrupoHTML}</div>`;
               if (a.promoNombre) {
                 const promoFull = (PROMOS || []).find(p => p.name === a.promoNombre);
                 if (promoFull && promoFull.division) {
@@ -3908,9 +4011,26 @@
             const _promoFullTot = a.promoNombre ? (PROMOS || []).find(p => p.name === a.promoNombre) : null;
             const _promoPrecioFijo = _promoFullTot ? Number(_promoFullTot.price || _promoFullTot.precio || 0) : 0;
             if (a.serviciosDetalle && a.serviciosDetalle.length > 0) {
-              const totalDetalle = a.serviciosDetalle.reduce((s, d) => s + Number(d.monto || 0), 0);
+              // P3.4 — 'anulado' nunca suma al total operativo. El resto de
+              // la lógica (promo de precio fijo vs multi-servicio) queda
+              // EXACTAMENTE igual — no se toca el criterio de no duplicar.
+              // El flag de "desglose moderno" se recalcula acá porque el del
+              // bloque de render es block-scoped (vive dentro del else
+              // normal/promo) y este cálculo corre fuera de ese bloque.
+              const _modernoTot = a.serviciosDetalle.some(d => String((d && d.estado) || '').trim() !== '');
+              const totalDetalle = a.serviciosDetalle
+                .filter(d => String((d && d.estado) || '').trim().toLowerCase() !== 'anulado')
+                .reduce((s, d) => s + Number(d.monto || 0), 0);
               if (totalDetalle > 0) {
-                if (_promoPrecioFijo > 0) {
+                if (_modernoTot) {
+                  // P3.4 — con desglose MODERNO (estado por componente), las
+                  // líneas de LINEAS son la fuente autoritativa del total:
+                  // a.total ya ES la suma de esas mismas líneas (ver el
+                  // agrupado de handleGetAtenciones), así que sumarlas encima
+                  // duplicaba el importe ($32 → $64). Se usa totalDetalle,
+                  // que además ya excluye 'anulado'.
+                  totalAcumDisplay = totalDetalle;
+                } else if (_promoPrecioFijo > 0) {
                   // Promo de precio fijo: el total ES el precio del combo. Nunca sumar las
                   // partes del propio combo encima. (Si a.total ya incluye adicionales
                   // reales fuera del combo, se respeta el mayor.)
