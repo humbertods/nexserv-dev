@@ -680,6 +680,61 @@
     const btnContainer = document.getElementById('as' + (slot1?1:2) + 'FinishBtns');
     if (!btnContainer) return;
 
+    // ── D7.1 Objetivo 1 — ruteo por fuente CANÓNICA, no por el booleano ────
+    // Fuente de verdad EXCLUSIVA: window._as{slot}FuenteCanonica ('LINEAS' |
+    // 'LEGACY' | 'DESCONOCIDA' | null/undefined), derivada SIEMPRE de
+    // a.fuenteReal (backend, TicketsFuente, ver handleGetAtenciones) vía
+    // normalizarFuenteAtencion_ — nunca por prefijo, serviciosDetalle,
+    // promoNombre ni activePromos/promoData.division.
+    // window._as{slot}FuenteLineas se mantiene como ESPEJO de compatibilidad
+    // (= FuenteCanonica === 'LINEAS') para consumidores existentes que aún
+    // lean el booleano, pero el ruteo real de este gate pasa por
+    // FuenteCanonica de acá en adelante.
+    const _slotLineasChk = slot1 ? 1 : 2;
+    const _fuenteCanonicaChk = window['_as' + _slotLineasChk + 'FuenteCanonica'];
+    const _idEsperaChkGate = slot1 ? (window._as1IdEspera || '') : (window._as2IdEspera || '');
+
+    if (_fuenteCanonicaChk === 'LINEAS') {
+      // Corrección UX única — LINEAS: finalización parcial. Corta ANTES de
+      // los checks SP-/TM-/SN- de abajo. Lectura fresca de LINEAS (condición
+      // G) decide el botón; si NO quedan líneas pendientes, deja que el
+      // flujo final actual (ya certificado, sin tocar) siga exactamente
+      // igual — no se duplica esa lógica acá.
+      const _refLineasChk = _idEsperaChkGate;
+      const _staffChk = (window.currentUser && window.currentUser.name) || '';
+      apiGet('getTicketLineas', { ticketRef: _refLineasChk }).then(function (r) {
+        const lineasFrescas = (r && r.success === true && Array.isArray(r.lineasActivas)) ? r.lineasActivas : [];
+        const quedanPendientes = lineasFrescas.some(function (l) { return String(l.estado || '').trim() === 'esperando'; });
+        if (quedanPendientes) {
+          btnContainer.innerHTML =
+            '<button class="btn-primary" style="margin-bottom:10px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);font-size:14px;padding:16px;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">✅ Ya hice mi parte — continuar con la siguiente staff</button>';
+        } else {
+          // Nada pendiente → mismo botón/flujo final que ya usan SN-/SP- hoy
+          // (ya certificado end-to-end hasta cobro) — no se reimplementa acá.
+          btnContainer.innerHTML =
+            '<button class="btn-primary" style="margin-bottom:10px;background:var(--ink);color:white;font-size:14px;padding:16px;" onclick="prepararYFinalizar(' + _slotLineasChk + ')">Finalizar servicio</button>';
+        }
+      }).catch(function (e) {
+        console.error('[updateFinishButtons][LINEAS]', e);
+        btnContainer.innerHTML = '<div style="text-align:center;color:var(--ink-faint);font-size:12px;padding:10px;">No se pudo cargar el estado del servicio. Recargá e intentá de nuevo.</div>';
+      });
+      return;
+    }
+
+    if (_fuenteCanonicaChk === 'DESCONOCIDA' || !_fuenteCanonicaChk) {
+      // Fail-closed: DESCONOCIDA nunca equivale a LEGACY. Si el slot está
+      // realmente vacío (nunca se pobló ninguna atención, ej. slot2 sin
+      // segunda clienta) no hay nada que finalizar — no se muestra ningún
+      // mensaje de error, simplemente no hay botón que renderizar.
+      if (!_idEsperaChkGate) return;
+      btnContainer.innerHTML =
+        '<div style="text-align:center;color:var(--danger);font-size:12px;padding:12px;border:1px solid var(--danger);border-radius:10px;">⚠️ No se pudo confirmar el origen de este ticket. Avisá a soporte antes de finalizar — no se habilita ningún botón hasta confirmar.</div>';
+      return;
+    }
+
+    // A partir de acá: _fuenteCanonicaChk === 'LEGACY' — continúa exactamente
+    // el flujo legacy existente (SP-/TM-/SN-/default), sin cambios.
+
     const clientName = document.getElementById('as' + (slot1?1:2) + 'Name')?.textContent?.replace(' ⭐','') || '';
     const clientKey = normalizeClientKey(clientName);
     const promoData = activePromos[clientKey];
@@ -1045,6 +1100,37 @@
     return { success: true, ticket_ref: ref, completadas: resultFin.completadas, quedanPendientes: quedanPendientes };
   }
   window.finalizarMisComponentesLineas_ = finalizarMisComponentesLineas_;
+
+  // Handler del botón "Ya hice mi parte" LINEAS (updateFinishButtons).
+  window._finalizarParteLineasEnCurso_ = window._finalizarParteLineasEnCurso_ || {};
+  async function _finalizarParteLineas_(slot) {
+    if (window._finalizarParteLineasEnCurso_[slot]) return; // anti doble-toque
+    const ticketRef = slot === 2 ? (window._as2IdEspera || '') : (window._as1IdEspera || '');
+    const staffN = (window.currentUser && window.currentUser.name) || '';
+    if (!ticketRef || !staffN) { alert('⚠️ Error interno: datos de la atención perdidos.'); return; }
+
+    window._finalizarParteLineasEnCurso_[slot] = true;
+    const btnContainer = document.getElementById('as' + slot + 'FinishBtns');
+    if (btnContainer) btnContainer.innerHTML = '<button class="btn-primary" disabled style="margin-bottom:10px;opacity:0.6;">Procesando...</button>';
+
+    const r = await finalizarMisComponentesLineas_(ticketRef, staffN);
+    window._finalizarParteLineasEnCurso_[slot] = false;
+
+    if (!r || r.success !== true) {
+      alert((r && r.error) || 'No se pudo finalizar el servicio. Intentá de nuevo.');
+      try { updateFinishButtons(slot); } catch (e) {}
+      return;
+    }
+
+    if (typeof showToast === 'function') showToast('✅ Tu parte quedó completada. La clienta continúa con otra staff.');
+    window['_as' + slot + 'FuenteCanonica'] = null; // D7.1 — neutraliza; loadStaffHome no reescribe FuenteCanonica, un refresh real la restaura desde a.fuenteReal
+    window['_as' + slot + 'FuenteLineas'] = false; // espejo de compatibilidad — esta atención de este slot ya terminó
+    // Refresco completo del panel de staff — evita reimplementar el reset
+    // manual del slot (avatar/nombre/servicios/botones); usa la función ya
+    // existente, sin modificarla.
+    if (typeof loadStaffHome === 'function') { try { await loadStaffHome(); } catch (e) {} }
+  }
+  window._finalizarParteLineas_ = _finalizarParteLineas_;
 
   // Cuando la staff hizo su parte (1er servicio) y el resto va a otra staff
   async function finishAndSendPartial() {
@@ -1470,6 +1556,20 @@
       
       // Resetear activeService
       window._as1Client = null;
+      // D7.1 Objetivo 1 — neutralizar fuente canónica de ambos slots ANTES de
+      // reconstruir. Si no hay atenciones (o la llamada falla), no debe
+      // sobrevivir un valor de una sesión/staff anterior — un slot sin
+      // atención real nunca es 'LINEAS' ni 'LEGACY' por defecto.
+      window._as1FuenteCanonica = null;
+      window._as1FuenteLineas = false;
+      window._as2FuenteCanonica = null;
+      window._as2FuenteLineas = false;
+      // D7.1 Objetivo 3 — metadata de promo por slot: limpia antes de
+      // reconstruir, para no arrastrar la promo de una sesión/staff previa
+      // si esta atención ya no trae promoNombre.
+      window._availablePromosPerSlot = window._availablePromosPerSlot || {};
+      window._availablePromosPerSlot[1] = null;
+      window._availablePromosPerSlot[2] = null;
       document.getElementById('retiroToggle1').style.display = 'none';
       document.getElementById('pestFichaQuick1').style.display = 'none';
       document.getElementById('pestFichaQuick1').innerHTML = '';
@@ -1509,6 +1609,11 @@
           const a1 = aten[0];
           window._as1Client = a1.codigo;
           window._as1IdEspera = a1.idEspera || ''; // ID del ticket LE-XXXX
+          // D7.1 Objetivo 1 — fuente canónica del slot 1, exclusivamente
+          // desde a1.fuenteReal (backend, TicketsFuente vía fuenteDelTicket).
+          // Nunca por prefijo de idEspera, serviciosDetalle ni promoNombre.
+          window._as1FuenteCanonica = normalizarFuenteAtencion_(a1.fuenteReal);
+          window._as1FuenteLineas = (window._as1FuenteCanonica === 'LINEAS'); // espejo de compatibilidad
           const initials1 = (a1.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av = document.getElementById('as1Avatar');
           if (_as1av) { _as1av.textContent = initials1; _as1av.className = 'client-avatar' + (a1.esTop ? ' is-top' : ''); }
@@ -1536,13 +1641,20 @@
                 console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (doLogin slot1)', a1.idEspera);
               }
               // Metadata de promo aparte (no reemplaza el slot ya calculado arriba).
-              if (a1.promoNombre && a1.promoNombre.trim() !== '' && !window._availablePromo) {
+              if (a1.promoNombre && a1.promoNombre.trim() !== '') {
                 var _precioPromo1m = Number(a1.total || 0) || Number(a1.precioRegular || 0);
                 if (!_precioPromo1m && typeof PROMOS !== 'undefined' && PROMOS) {
                   var _promoMatch1m = PROMOS.find(function(p){ return p.name === a1.promoNombre || p.promo === a1.promoNombre; });
                   if (_promoMatch1m) _precioPromo1m = Number(_promoMatch1m.precio || _promoMatch1m.price || _promoMatch1m.precioPromo || 0);
                 }
-                window._availablePromo = { name: a1.promoNombre, price: _precioPromo1m, regular: Number(a1.precioRegular || a1.total || 0) };
+                // D7.1 Objetivo 3 — SIEMPRE por slot, nunca guardado por
+                // "!window._availablePromo" (esa guarda es la causa de que
+                // la promo del slot2 se pierda cuando slot1 ya reclamó la
+                // variable global compartida — ver hallazgo D7).
+                var _promo1mObj = { name: a1.promoNombre, price: _precioPromo1m, regular: Number(a1.precioRegular || a1.total || 0) };
+                window._availablePromosPerSlot = window._availablePromosPerSlot || {};
+                window._availablePromosPerSlot[1] = _promo1mObj;
+                if (!window._availablePromo) window._availablePromo = _promo1mObj; // espejo legacy — no decide nada
               }
             } else if (a1.promoNombre && a1.promoNombre.trim() !== '') {
               // Legacy sin estados (o sin desglose) + promoNombre: tratamiento
@@ -1553,9 +1665,11 @@
                 if (_promoMatch) _precioPromo1 = Number(_promoMatch.precio || _promoMatch.price || _promoMatch.precioPromo || 0);
               }
               slotServices[1] = [{ name: a1.promoNombre, price: _precioPromo1, area: a1.area || '', status: 'aprobado', isPromo: true, lineaId: String(a1.lineaId || '') }];
-              if (!window._availablePromo) {
-                window._availablePromo = { name: a1.promoNombre, price: _precioPromo1, regular: Number(a1.precioRegular || a1.total || 0) };
-              }
+              // D7.1 Objetivo 3 — SIEMPRE por slot (ver nota arriba).
+              var _promo1Obj = { name: a1.promoNombre, price: _precioPromo1, regular: Number(a1.precioRegular || a1.total || 0) };
+              window._availablePromosPerSlot = window._availablePromosPerSlot || {};
+              window._availablePromosPerSlot[1] = _promo1Obj;
+              if (!window._availablePromo) window._availablePromo = _promo1Obj; // espejo legacy — no decide nada
             } else if (_r5) {
               // Legacy con detalles, sin promoNombre: comportamiento previo
               // (usar los detalles legacy tal cual, sin filtrar).
@@ -1570,7 +1684,12 @@
             const _as1t = document.getElementById('as1Total'); if (_as1t) _as1t.textContent = '$' + _t1;
             const _as1sc = document.getElementById('as1SvcCount'); if (_as1sc) _as1sc.textContent = String((slotServices[1]||[]).length);
           }
-          
+          // D7.1 Objetivo 1 — refrescar botón de finalización con la fuente
+          // canónica ya establecida (_as1FuenteCanonica, arriba). Antes del
+          // refresh esto no se llamaba nunca desde doLogin — el botón quedaba
+          // con lo que hubiera en el HTML por defecto hasta la próxima acción.
+          try { updateFinishButtons(1); } catch (eUFB1) { console.warn('[doLogin] updateFinishButtons(1):', eUFB1); }
+
           // Doble atención: registrar en activeClients
           if (user.maxClients === 2) {
             activeClients[user.name] = [{ name: a1.nombre, code: a1.codigo, service: a1.servicio }];
@@ -1578,6 +1697,11 @@
               const a2 = aten[1];
               window._as2Client = a2.codigo;
               window._as2IdEspera = a2.idEspera || ''; // ID del ticket de la 2ª clienta
+              // D7.1 Objetivo 1 — fuente canónica del slot 2, exclusivamente
+              // desde a2.fuenteReal — mismo criterio que slot1, cada slot
+              // resuelto de forma completamente independiente.
+              window._as2FuenteCanonica = normalizarFuenteAtencion_(a2.fuenteReal);
+              window._as2FuenteLineas = (window._as2FuenteCanonica === 'LINEAS'); // espejo de compatibilidad
               activeClients[user.name].push({ name: a2.nombre, code: a2.codigo, service: a2.servicio });
               const initials2 = a2.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
               const _as2av = document.getElementById('as2Avatar'); if (_as2av) _as2av.textContent = initials2;
@@ -1603,11 +1727,23 @@
                 if (_r6.lista.length === 0) {
                   console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (doLogin slot2)', a2.idEspera);
                 }
-                if (a2.promoNombre && a2.promoNombre.trim() !== '' && !window._availablePromo) {
-                  window._availablePromo = { name: a2.promoNombre, price: Number(a2.total || 0), regular: Number(a2.precioRegular || a2.total || 0) };
+                if (a2.promoNombre && a2.promoNombre.trim() !== '') {
+                  // D7.1 Objetivo 3 — SIEMPRE por slot. Antes esto solo se
+                  // guardaba si `!window._availablePromo`: si el slot1 ya
+                  // había reclamado la variable global compartida, la promo
+                  // del slot2 se perdía en silencio (hallazgo D7-C).
+                  var _promo2mObj = { name: a2.promoNombre, price: Number(a2.total || 0), regular: Number(a2.precioRegular || a2.total || 0) };
+                  window._availablePromosPerSlot = window._availablePromosPerSlot || {};
+                  window._availablePromosPerSlot[2] = _promo2mObj;
+                  if (!window._availablePromo) window._availablePromo = _promo2mObj; // espejo legacy — no decide nada
                 }
               } else if (a2.promoNombre && a2.promoNombre.trim() !== '') {
                 slotServices[2] = [{ name: a2.promoNombre, price: Number(a2.total || 0), area: a2.area || '', status: 'aprobado', isPromo: true, lineaId: String(a2.lineaId || '') }];
+                // D7.1 Objetivo 3 — SIEMPRE por slot (ver nota arriba).
+                var _promo2Obj = { name: a2.promoNombre, price: Number(a2.total || 0), regular: Number(a2.precioRegular || a2.total || 0) };
+                window._availablePromosPerSlot = window._availablePromosPerSlot || {};
+                window._availablePromosPerSlot[2] = _promo2Obj;
+                if (!window._availablePromo) window._availablePromo = _promo2Obj; // espejo legacy — no decide nada
               } else if (_r6) {
                 slotServices[2] = _r6.lista.map(function(sd){ return {
                   name: sd.servicio || sd.nombre || sd.name || '',
@@ -1622,16 +1758,24 @@
               const _t2 = (slotServices[2]||[]).reduce(function(s,v){ return s + Number(v.price||0); }, 0);
               const _as2t = document.getElementById('as2Total'); if (_as2t) _as2t.textContent = '$' + _t2;
               const _as2sc = document.getElementById('as2SvcCount'); if (_as2sc) _as2sc.textContent = String((slotServices[2]||[]).length);
+              // D7.1 Objetivo 1 — refrescar botón de finalización de slot2.
+              try { updateFinishButtons(2); } catch (eUFB2) { console.warn('[doLogin] updateFinishButtons(2):', eUFB2); }
             } else {
               // No hay 2ª clienta → limpiar slot 2 para no arrastrar datos de una sesión anterior
               window._as2Client = '';
               window._as2IdEspera = '';
+              // D7.1 Objetivo 1 — slot vacío: ya neutralizado al inicio de
+              // doLogin (FuenteCanonica=null), se reafirma acá por claridad.
+              window._as2FuenteCanonica = null;
+              window._as2FuenteLineas = false;
               slotServices[2] = [];
               const _as2nm = document.getElementById('as2Name'); if (_as2nm) _as2nm.textContent = '';
               const _as2cd2 = document.getElementById('as2Code'); if (_as2cd2) _as2cd2.textContent = '';
               const _as2sl = document.getElementById('as2ServicesList'); if (_as2sl) _as2sl.innerHTML = '';
               const _as2t2 = document.getElementById('as2Total'); if (_as2t2) _as2t2.textContent = '$0';
               const _as2sc2 = document.getElementById('as2SvcCount'); if (_as2sc2) _as2sc2.textContent = '0';
+              // updateFinishButtons(2) no se llama: slot vacío, sin idEspera
+              // → el guard fail-closed de la función retorna sin renderizar nada.
             }
             updateCapacityUI(user.name);
           }
@@ -2579,6 +2723,21 @@
     return '';
   }
 
+  // ── D7.1 Objetivo 1 — normalización canónica de a.fuenteReal (getAtenciones) ──
+  // Misma disciplina que normalizarFuenteTake_: lista cerrada de valores
+  // exactos, nunca includes()/startsWith()/regex ni inferencia por prefijo.
+  // A diferencia de normalizarFuenteTake_ (que hace fail-closed a '' porque
+  // openTake bloquea la acción por completo ante cualquier duda), acá el
+  // fail-closed es explícito 'DESCONOCIDA' — vacío, undefined, o cualquier
+  // valor no reconocido caen todos acá. 'DESCONOCIDA' NUNCA es sinónimo de
+  // 'LEGACY': son ramas de ruteo distintas en updateFinishButtons.
+  function normalizarFuenteAtencion_(fuenteReal) {
+    const f = String(fuenteReal || '').trim().toUpperCase();
+    if (f === 'LINEAS') return 'LINEAS';
+    if (f === 'LEGACY') return 'LEGACY';
+    return 'DESCONOCIDA';
+  }
+
   function openTake(idx) {
     const w = window._waitListData[idx];
     if (!w) { alert('Error: no se encontró la clienta'); return; }
@@ -2645,7 +2804,6 @@
     // (única función de normalización — acepta LINEAS, LINEASNATIVO como
     // alias de LINEAS, y LEGACY; cualquier otra cosa cae a '' = bloqueo).
     const _fuenteTake = normalizarFuenteTake_(w.fuente);
-    window._takingTicketRefLineas = '';
 
     if (_fuenteTake !== 'LINEAS' && _fuenteTake !== 'LEGACY') {
       alert('⚠️ No se pudo confirmar el origen de este ticket. Avisá a soporte antes de tomarlo.');
@@ -2659,50 +2817,48 @@
         alert('⚠️ Ticket nativo sin referencia identificable (REFERENCIA_TICKET_AUSENTE). Avisá a soporte antes de tomarlo.');
         return;
       }
-      window._takingTicketRefLineas = _refCanonica;
-      window._takingLineasSeleccion = null; // se llena solo si se usa el selector (ver abajo)
 
-      // ── Bloque 2 — Promo parcial LINEAS: selector de componentes ──────────
-      // 2+ componentes con id real → reutiliza el CONTENEDOR VISUAL ya
-      // existente (#takeDepiSplit/#takeDepiItems, index.html) — NUNCA su
-      // callback/ruta legacy (confirmTakeDepi/confirmTakeDepiAll llevan un
-      // guard nuevo más abajo que corta a la lógica LINEAS antes de tocar
-      // nada legacy). window._depiItems reutiliza renderDepiItems() tal
-      // cual (genérica, solo lee nombre/precio/checked/readonly/completado)
-      // — se le agrega _lineaId, un campo propio que esa función ignora.
-      // Identidad exclusiva: d.id (lineaId real de LINEAS), nunca nombre.
-      if (_detalleTake.length > 1) {
-        window._depiItems = _detalleTake.map(function (d) {
-          return {
-            nombre: d.servicio || d.area || 'Servicio',
-            precio: Number(d.monto || 0),
-            checked: true, // por defecto: todos seleccionados (equivalente a "hacer todo")
-            readonly: false,
-            completado: false,
-            _lineaId: d.id || d.lineaId || ''
-          };
-        }).filter(function (i) { return i._lineaId; }); // nunca un item sin id real
+      // ── Corrección UX única — LINEAS ────────────────────────────────────
+      // openTake NUNCA muta ni muestra un modal intermedio para LINEAS.
+      // Prepara únicamente los datos y abre DIRECTO la confirmación canónica
+      // "Servicio asignado" (showConfirmServiceModal) — la única confirmación
+      // visual del flujo. La mutación (apiPost tomarClienta) ocurre
+      // exclusivamente al pulsar "Confirmar servicio" dentro de ese modal
+      // (ver showConfirmServiceModal, rama LINEAS).
+      //
+      // Slot: mismo criterio que el resto del archivo usa para _as1IdEspera/
+      // _as2IdEspera — el primer slot libre (sin idEspera activo todavía) es
+      // el que se usa para esta nueva atención.
+      const _slotLineas = (!window._as1IdEspera) ? 1 : (!window._as2IdEspera) ? 2 : 1;
 
-        if (window._depiItems.length !== _detalleTake.length) {
-          console.warn('[openTake] Algún componente LINEAS llegó sin id — excluido del selector', _detalleTake);
-        }
-        if (window._depiItems.length === 0) {
-          alert('⚠️ Ticket nativo sin componentes identificables (REFERENCIA_TICKET_AUSENTE). Avisá a soporte antes de tomarlo.');
-          return;
-        }
+      // Problema 1 (corrección) — guardar el estado EXACTO del slot antes de
+      // sobrescribirlo, para restaurarlo tal cual si la staff cancela sin
+      // confirmar. Nunca asume que estaba vacío: si por algún motivo el
+      // slot ya tenía una atención real, esa atención se restaura íntegra.
+      window['_as' + _slotLineas + 'PreTomaLineas'] = {
+        idEspera: _slotLineas === 1 ? (window._as1IdEspera || '') : (window._as2IdEspera || ''),
+        client:   _slotLineas === 1 ? (window._as1Client   || '') : (window._as2Client   || '')
+      };
 
-        if (splitEl) splitEl.style.display = 'block';
-        if (normalEl) normalEl.style.display = 'none';
-        if (typeof renderDepiItems === 'function') renderDepiItems();
-        document.getElementById('takeModal').classList.add('active');
-        return;
+      if (_slotLineas === 1) {
+        window._as1IdEspera = _refCanonica;
+        window._as1Client = w.codigo || w.code || '';
+        window._as1ClientNameLineas = w.name || ''; // por-slot — NUNCA leer de window._takingClient (compartida)
+        window._as1ServiciosDetalleLineas = _detalleTake;
+        window._as1LineasSeleccion = null;
+        window._as1FuenteCanonica = null; // D7.1 — recién se marca 'LINEAS' al confirmar con éxito
+        window._as1FuenteLineas = false; // espejo de compatibilidad
+      } else {
+        window._as2IdEspera = _refCanonica;
+        window._as2Client = w.codigo || w.code || '';
+        window._as2ClientNameLineas = w.name || ''; // por-slot — NUNCA leer de window._takingClient (compartida)
+        window._as2ServiciosDetalleLineas = _detalleTake;
+        window._as2LineasSeleccion = null;
+        window._as2FuenteCanonica = null; // D7.1
+        window._as2FuenteLineas = false; // espejo de compatibilidad
       }
 
-      // 1 sola línea con id real (o 0) → comportamiento actual sin cambios,
-      // sin selector (V8/P12).
-      if (splitEl) splitEl.style.display = 'none';
-      if (normalEl) normalEl.style.display = 'block';
-      document.getElementById('takeModal').classList.add('active');
+      showConfirmServiceModal(_slotLineas);
       return;
     }
 
@@ -2713,6 +2869,7 @@
     if (!_esTM_ && typeof _tieneIdentidadEstableParaSelector_ === 'function'
         && _tieneIdentidadEstableParaSelector_(_detalleTake)) {
       const _grupoId = String(w.ticketRef || w.idEspera || w.id || '');
+
 
       // ── BLOQUE 8C.2 — sin elección real que mostrar: todos los
       // componentes 'esperando' de este ticket ya son de esta staff. Se
@@ -2946,17 +3103,6 @@
   }
 
   async function confirmTakeDepiAll() {
-    // ── Bloque 2 — Promo parcial LINEAS ─────────────────────────────────────
-    // Guard: si esta toma es LINEAS (seteado únicamente por la rama LINEAS
-    // de openTake), usar la lógica nueva y cortar ANTES de tocar cualquier
-    // línea de la lógica legacy de abajo. Identidad por _lineaId, nunca
-    // por nombre/posición.
-    if (window._takingTicketRefLineas) {
-      window._takingLineasSeleccion = (window._depiItems || [])
-        .map(function (i) { return i._lineaId; }).filter(Boolean);
-      await confirmTake();
-      return;
-    }
     // La staff hace todo el servicio pendiente — flujo normal
     window._depiItems = (window._depiItems || []).map(i => ({
       ...i,
@@ -2966,19 +3112,6 @@
   }
 
   async function confirmTakeDepi() {
-    // ── Bloque 2 — Promo parcial LINEAS ─────────────────────────────────────
-    if (window._takingTicketRefLineas) {
-      const seleccionados = (window._depiItems || [])
-        .filter(function (i) { return i.checked; })
-        .map(function (i) { return i._lineaId; }).filter(Boolean);
-      if (seleccionados.length === 0) {
-        alert('Seleccioná al menos un servicio para hacer vos.');
-        return; // bloqueo frontend — cero apiPost (P7)
-      }
-      window._takingLineasSeleccion = seleccionados;
-      await confirmTake();
-      return;
-    }
     const items = window._depiItems || [];
     // Ignorar items readonly (ya completados) — solo procesar los pendientes
     const itemsPendientes = items.filter(i => !i.readonly && !i.completado);
@@ -3014,6 +3147,22 @@
   }
 
   async function confirmTake_() {
+    // ── P0 (corrección aislamiento slot1/slot2) — snapshot inmutable de esta
+    // ejecución, capturado ANTES de cualquier await. openTake() de OTRA
+    // clienta puede sobrescribir window._taking* mientras esta función está
+    // suspendida esperando una respuesta de red — todo lo que se lea
+    // DESPUÉS de un await debe salir de takeCtx, nunca de window._taking*
+    // de nuevo. No se eliminan las variables window._taking* (siguen
+    // existiendo y escribiéndose para compatibilidad con consumidores
+    // legacy que las lean fuera de esta función).
+    const takeCtx = {
+      id: window._takingId,
+      data: window._takingData,
+      client: window._takingClient,
+      clientCode: window._takingClientCode,
+      service: window._takingService
+    };
+
     // Fase 0.1 corrección Parte B — el cierre del modal YA NO es incondicional
     // acá. Legacy y TM cierran temprano (en su propia rama, comportamiento sin
     // cambios). La rama nativa con selector NO cierra hasta confirmar éxito
@@ -3021,10 +3170,10 @@
     // el checkbox marcado y permite reintentar (F04).
     const user = window.currentUser;
     const name = user ? user.name : 'Staff';
-    const takingId = String(window._takingId || '');
+    const takingId = String(takeCtx.id || '');
 
     // Validar asignación directa ANTES de llamar al backend
-    const takingDataCheck = window._takingData;
+    const takingDataCheck = takeCtx.data;
     if (takingDataCheck && takingDataCheck.asignadaA && takingDataCheck.asignadaA.trim() !== '') {
       if (takingDataCheck.asignadaA !== name) {
         alert('⚠️ Esta clienta está asignada directamente a ' + takingDataCheck.asignadaA + '. No podés tomarla.');
@@ -3032,51 +3181,7 @@
       }
     }
 
-    // ── Bloque 2 Frontend — Tomar clienta LINEAS (autorizado) ──────────────
-    // PRIORIDAD: window._takingTicketRefLineas ya fue resuelto por
-    // openTake() a partir de w.fuente — se revisa ANTES que el prefijo TM-
-    // para que un ticket defensivo con id TM- pero fuente=LINEAS (F-L2)
-    // nunca caiga en LineaService.tomarAreaTicket. Reutiliza el estado de
-    // ruteo ya establecido (no se infiere fuente de nuevo por prefijo acá).
-    if (window._takingTicketRefLineas) {
-      // Backend certificado (harness B1-B10, TODOS OK): con ticketRef+staff
-      // y SIN componentesSeleccionados, iniciarComponentesTicketNativoPorRef_
-      // autoselecciona TODAS las líneas elegibles de esta staff — 1, 2 o N,
-      // sin exigir selección. Payload deliberadamente NO incluye la clave
-      // componentesSeleccionados (ausente ≠ [] — el backend trata [] como
-      // SELECCION_VACIA, así que omitirla es obligatorio, no cosmético).
-      const _refLineas = window._takingTicketRefLineas;
-      // componentesSeleccionados sigue OPCIONAL: solo se incluye si el
-      // selector (2+ componentes) se usó realmente. Para 1 sola línea,
-      // window._takingLineasSeleccion nunca se pobló — payload idéntico
-      // al de antes de este bloque (P12, sin regresión).
-      const _payloadLineas = { idEspera: _refLineas, chicaNombre: name };
-      if (Array.isArray(window._takingLineasSeleccion) && window._takingLineasSeleccion.length > 0) {
-        _payloadLineas.componentesSeleccionados = window._takingLineasSeleccion;
-      }
-      let resultLineas;
-      try {
-        resultLineas = await apiPost('tomarClienta', _payloadLineas, { retries: 0, timeoutMs: 15000 });
-      } catch (err) {
-        console.error('Error al tomar clienta (LINEAS):', err);
-        alert('Error al tomar la clienta. Intentá de nuevo.');
-        return; // modal permanece abierto, sin escritura confirmada
-      }
-      if (!resultLineas || resultLineas.success !== true) {
-        const msg = (resultLineas && resultLineas.message) || 'No se pudo iniciar el servicio.';
-        alert(msg);
-        return; // modal permanece abierto — ningún componentesSeleccionados
-                 // que reintentar: el backend ya decide todo con el mismo
-                 // payload en un nuevo intento.
-      }
-      closeModal();
-      const _nIniciadas = (resultLineas.iniciadas && resultLineas.iniciadas.length) || 0;
-      simulateNotif('mikaela', name + ' tomó ' + _nIniciadas
-        + ' servicio' + (_nIniciadas === 1 ? '' : 's')
-        + ' de ' + (window._takingClientCode || 'una clienta'), 'Lista de espera · ahora', false);
-      window._takingTicketRefLineas = '';
-      window._takingLineasSeleccion = null;
-    } else if (takingId.startsWith('TM-')) {
+    if (takingId.startsWith('TM-')) {
       // ── TICKET MULTI: usar endpoint específico (legacy/TM — cierre temprano
       //    conservado, sin más cambios que la ubicación del closeModal) ──────
       closeModal();
@@ -3085,16 +3190,16 @@
           idEspera:    takingId,
           chicaNombre: name,
           chicaArea:   user?.area || '',
-          areaIdx:     window._takingData?.areaIdx || 0
+          areaIdx:     takeCtx.data?.areaIdx || 0
         });
         if (!result.success) { alert(result.message || 'Error al tomar el servicio TM'); return; }
-        simulateNotif('mikaela', name + ' tomó área TM de ' + (window._takingClientCode || 'clienta'), 'Ticket multi · ahora', false);
+        simulateNotif('mikaela', name + ' tomó área TM de ' + (takeCtx.clientCode || 'clienta'), 'Ticket multi · ahora', false);
       } catch(err) {
         alert('Error de conexión'); return;
       }
       // Continuar al flujo de carga del panel (sin promo)
       window._availablePromo = null;
-      window._takingSecuencia = window._takingData ? (window._takingData.secuencia || []) : [];
+      window._takingSecuencia = takeCtx.data ? (takeCtx.data.secuencia || []) : [];
       window._takingPromasExtra = [];
     } else {
     // ── Fase 0 corrección — Parte 4/5: selector nativo de subtickets activo ──
@@ -3119,7 +3224,7 @@
         // si el servidor procesó el intento pero el cliente no recibió la
         // respuesta a tiempo.
         result = await apiPost('tomarClienta', {
-          idListaEspera: window._takingId,
+          idListaEspera: takeCtx.id,
           chicaNombre: name,
           componentesSeleccionados: componentesSeleccionados
         }, { retries: 0, timeoutMs: 15000 });
@@ -3165,7 +3270,7 @@
       closeModal();
       simulateNotif('mikaela', name + ' tomó ' + componentesSeleccionados.length
         + ' servicio' + (componentesSeleccionados.length > 1 ? 's' : '')
-        + ' de ' + (window._takingClientCode || 'una clienta'), 'Lista de espera · ahora', false);
+        + ' de ' + (takeCtx.clientCode || 'una clienta'), 'Lista de espera · ahora', false);
       window._takingSubticketIdsConfirmados = componentesSeleccionados.map(function (c) { return String(c.id); });
       if (window._subticketSeleccion) delete window._subticketSeleccion[_grupoId];
       if (window._subticketComponentes) delete window._subticketComponentes[_grupoId];
@@ -3186,14 +3291,14 @@
     // es la que efectivamente se ejecuta para el ticket problemático. ──────
     console.log('[DIAG CONFIRM TAKE PAYLOAD LEGACY]', {
       rama: 'legacy (window._takingSubticketActivo era false)',
-      takingId: window._takingId,
-      takingData: window._takingData,
-      payload: { idListaEspera: window._takingId, chicaNombre: name }
+      takingId: takeCtx.id,
+      takingData: takeCtx.data,
+      payload: { idListaEspera: takeCtx.id, chicaNombre: name }
     });
     try {
       // FASE 1 ACOTADA (DEV) Parte E — sin reintento automático (no idempotente).
       resultLegacy = await apiPost('tomarClienta', {
-        idListaEspera: window._takingId,
+        idListaEspera: takeCtx.id,
         chicaNombre: name
       }, { retries: 0, timeoutMs: 15000 });
     } catch (err) {
@@ -3204,7 +3309,7 @@
     }
     if (resultLegacy && resultLegacy.success === true) {
       closeModal();
-      simulateNotif('mikaela', name + ' tomó a ' + (window._takingClientCode || 'una clienta'), 'Lista de espera · ahora', false);
+      simulateNotif('mikaela', name + ' tomó a ' + (takeCtx.clientCode || 'una clienta'), 'Lista de espera · ahora', false);
     } else if (resultLegacy && resultLegacy.message) {
       // Rechazo explícito del backend (ej. ya tomada por otra persona).
       if (_btnLegacy) { _btnLegacy.disabled = false; _btnLegacy.textContent = _btnLegacyTxtOrig; }
@@ -3227,34 +3332,50 @@
     } // ── fin else nativo-con-selector / legacy ────────────────────────────
     
     // Guardar la promo disponible (si existe) pero NO aplicarla automáticamente
-    // — compartido por AMBAS ramas (nativo con selector y legacy).
-    const takingData = window._takingData;
-    const clientKey = normalizeClientKey(window._takingClient || '');
+    // — compartido por AMBAS ramas (nativo con selector y legacy). Usa
+    // takeCtx (snapshot de ESTA ejecución), nunca window._taking* de nuevo
+    // — ya estamos después de uno o más await.
+    const takingData = takeCtx.data;
+    const clientKey = normalizeClientKey(takeCtx.client || '');
 
+    let localAvailablePromo; // P1 — se transporta a loadClientAfterTake vía takeCtx, no vía mailbox global
     if (takingData && takingData.promoNombre && takingData.promoNombre.trim() !== '') {
-      window._availablePromo = {
+      localAvailablePromo = {
         name: takingData.promoNombre,
         price: takingData.precioPromo,
         regular: takingData.precioRegular
       };
     } else {
-      window._availablePromo = null;
+      localAvailablePromo = null;
       if (takingId.startsWith('SN-') && clientKey) {
         delete activePromos[clientKey];
         saveActivePromos();
       }
     }
-    window._takingSecuencia = takingData ? (takingData.secuencia || []) : [];
+    // Se sigue escribiendo la global por compatibilidad — no se elimina
+    // (puede haber consumidores legacy fuera de esta cadena que la lean).
+    // Pero loadClientAfterTake ya NO depende de leerla de vuelta: recibe
+    // takeCtx.availablePromo/takeCtx.secuencia explícitos.
+    window._availablePromo = localAvailablePromo;
+    const localSecuencia = takingData ? (takingData.secuencia || []) : [];
+    window._takingSecuencia = localSecuencia;
     window._takingPromasExtra = takingData ? (takingData.promasExtra || []) : [];
     try {
       if (window._takingPromasExtra.length > 0) {
-        sessionStorage.setItem('nexserv_promasExtra_' + (window._as1IdEspera||''), JSON.stringify(window._takingPromasExtra));
+        // P0.2 (corrección bug confirmado) — antes usaba
+        // window._as1IdEspera hardcodeado sin importar el slot real. Ahora
+        // usa takeCtx.id: la identidad REAL del ticket recién tomado en
+        // ESTA ejecución, nunca una posición de slot adivinada.
+        sessionStorage.setItem('nexserv_promasExtra_' + (takeCtx.id || ''), JSON.stringify(window._takingPromasExtra));
       }
     } catch(eS) {}
+    takeCtx.availablePromo = localAvailablePromo;
+    takeCtx.secuencia = localSecuencia;
+    takeCtx.promasExtra = window._takingPromasExtra;
     } // ── fin else flujo normal ────────────────────────────────
 
     // Cargar clienta normalmente
-    await loadClientAfterTake();
+    await loadClientAfterTake(takeCtx);
   }
   
   // ── Nota directa de Mikaela/recepción para la staff (cartel amarillo) ──
@@ -3320,7 +3441,23 @@
     t.style.display = (t.style.display === 'none') ? 'block' : 'none';
   }
 
-  async function loadClientAfterTake() {
+  async function loadClientAfterTake(takeCtx) {
+    // P0 (corrección aislamiento slot1/slot2) — parámetro OPCIONAL. Si no se
+    // pasa (compatibilidad externa, cero llamador conocido hoy fuera de
+    // confirmTake_ pero se preserva por si acaso), cae exactamente al
+    // comportamiento anterior: lee window._taking* en el momento en que
+    // esta función corre. Si se pasa, usa el snapshot inmutable de ESA
+    // ejecución — nunca vuelve a leer window._taking* después de su propio
+    // await de abajo, que es exactamente donde podía contaminarse con una
+    // segunda clienta abierta mientras esta función esperaba respuesta.
+    if (!takeCtx) {
+      takeCtx = {
+        id: window._takingId, data: window._takingData, client: window._takingClient,
+        clientCode: window._takingClientCode, service: window._takingService,
+        availablePromo: window._availablePromo, secuencia: window._takingSecuencia,
+        promasExtra: window._takingPromasExtra
+      };
+    }
     const user = window.currentUser;
     const name = user ? user.name : 'Staff';
     
@@ -3333,13 +3470,13 @@
 
         // Cargar la atención que REALMENTE se acaba de tomar (no por índice ingenuo).
         // Clave en tickets TM con varias áreas: evita cargar el área/promo de otra staff.
-        const _takenId = String(window._takingId || '');
+        const _takenId = String(takeCtx.id || '');
         let a = null;
         if (_takenId) a = aten.find(function(x){ return String(x.idEspera || '') === _takenId; }) || null;
         if (!a) a = aten[slot];
         if (slot === 0) {
           window._as1Client = a.codigo;
-          window._as1IdEspera = a.idEspera || window._takingId || ''; // ID ticket LE-XXXX
+          window._as1IdEspera = a.idEspera || takeCtx.id || ''; // ID ticket LE-XXXX
           const initials = (a.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av0 = document.getElementById('as1Avatar');
           if (_as1av0) { _as1av0.textContent = initials; _as1av0.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -3359,7 +3496,7 @@
             document.getElementById('obs1Display').style.color = '';
             document.getElementById('obs1Display').style.fontWeight = '';
           }
-          renderSecuenciaBanner(1, a.secuencia && a.secuencia.length > 0 ? a.secuencia : (window._takingSecuencia || []));
+          renderSecuenciaBanner(1, a.secuencia && a.secuencia.length > 0 ? a.secuencia : (takeCtx.secuencia || []));
           
           // Limpiar servicios previos
           slotServices[1] = [];
@@ -3371,7 +3508,9 @@
           // Detectar si viene de enganche (otra área ya completó parte del servicio)
           const esEnganche = obsText && obsText.includes('✅');
           window._esEnganche = esEnganche;
-          window._desgloseAcumulado = []; // reset al tomar nueva clienta
+          window._desgloseAcumulado = []; // reset al tomar nueva clienta — se mantiene por compatibilidad con consumidores legacy
+          window._desgloseAcumuladoPorSlot = window._desgloseAcumuladoPorSlot || {};
+          window._desgloseAcumuladoPorSlot[1] = []; // P1.5 — fuente que showConfirmServiceModal(1) debe leer
 
           // Si viene como enganche, guardar el historial anterior en desglose acumulado
           if (esEnganche) {
@@ -3381,6 +3520,7 @@
               const match = p.match(/✅\s*(.*?)\s+completado por\s+(.*?)\s+·/);
               return match ? { staff: match[2].trim(), servicio: match[1].trim(), area: match[1].trim(), monto: 0, esHistorico: true } : null;
             }).filter(Boolean);
+            window._desgloseAcumuladoPorSlot[1] = window._desgloseAcumulado;
           }
           
           // Si es depilación compartida (split), cargar solo los servicios de esta staff
@@ -3402,7 +3542,7 @@
           }
 
           // Si viene con servicio normal (NO promo), cargarlo
-          if (a.servicio && a.servicio !== '—' && !a.promoNombre && !window._availablePromo && !(window._depiMisParts && window._depiMisParts.length > 0)) {
+          if (a.servicio && a.servicio !== '—' && !a.promoNombre && !takeCtx.availablePromo && !(window._depiMisParts && window._depiMisParts.length > 0)) {
             // El servicio puede venir como JSON string {"nombre":"...","precio":17} o como texto plano
             let servicioNombre = a.servicio;
             let servicioPrecio = Number(a.total) || 0;
@@ -3453,14 +3593,14 @@
           }
           
           // Limpiar promo residual si este servicio no tiene promo
-          if (!window._availablePromo) {
+          if (!takeCtx.availablePromo) {
             const clientKeyClean = normalizeClientKey(a.nombre);
             if (activePromos[clientKeyClean]) delete activePromos[clientKeyClean];
           }
           
           // Si viene con promo asignada, guardarla pero permitir cambiarla
-          if (window._availablePromo) {
-            const promoBasic = window._availablePromo;
+          if (takeCtx.availablePromo) {
+            const promoBasic = takeCtx.availablePromo;
             
             // Buscar la promo completa en PROMOS
             const promoFull = PROMOS.find(p => p.name === promoBasic.name);
@@ -3543,6 +3683,7 @@
               // conserva el comportamiento anterior tal cual.
               if (a.serviciosDetalle && a.serviciosDetalle.length > 0) {
                 window._desgloseAcumulado = a.serviciosDetalle;
+                window._desgloseAcumuladoPorSlot[1] = a.serviciosDetalle;
                 const svcListEl = document.getElementById('as1ServicesList');
                 if (svcListEl) {
                   const _paraHistorial1 = (_restauradoP1 && _restauradoP1.esModerno)
@@ -3616,7 +3757,7 @@
               }
 
               // Mostrar banner de promasExtra si hay mas promos pendientes
-              const promasExtraActuales = window._takingPromasExtra || [];
+              const promasExtraActuales = takeCtx.promasExtra || [];
               if (promasExtraActuales.length > 0) {
                 const extraDiv = document.createElement('div');
                 extraDiv.id = 'promoExtraInfo1';
@@ -3769,7 +3910,7 @@
           }
         } else {
           window._as2Client = a.codigo;
-          window._as2IdEspera = a.idEspera || window._takingId || ''; // ID del ticket de la 2ª clienta
+          window._as2IdEspera = a.idEspera || takeCtx.id || ''; // ID del ticket de la 2ª clienta
           const initials2b = a.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as2avb = document.getElementById('as2Avatar');
           if (_as2avb) { _as2avb.textContent = initials2b; _as2avb.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -3798,7 +3939,9 @@
           // Detectar si viene de enganche (otra área ya completó parte del servicio) — POR SLOT
           const esEnganche2 = obsText2 && obsText2.includes('✅');
           window._esEnganche2 = esEnganche2;
-          window._desgloseAcumulado = []; // reset al tomar nueva clienta
+          window._desgloseAcumulado = []; // reset al tomar nueva clienta — se mantiene por compatibilidad
+          window._desgloseAcumuladoPorSlot = window._desgloseAcumuladoPorSlot || {};
+          window._desgloseAcumuladoPorSlot[2] = []; // P1.5 — fuente que showConfirmServiceModal(2) debe leer
 
           // Si viene como enganche, guardar el historial anterior en desglose acumulado
           if (esEnganche2) {
@@ -3807,10 +3950,11 @@
               const match = p.match(/✅\s*(.*?)\s+completado por\s+(.*?)\s+·/);
               return match ? { staff: match[2].trim(), servicio: match[1].trim(), area: match[1].trim(), monto: 0, esHistorico: true } : null;
             }).filter(Boolean);
+            window._desgloseAcumuladoPorSlot[2] = window._desgloseAcumulado;
           }
           
           // Si viene con servicio normal asignado (NO promo), cargarlo
-          if (a.servicio && a.servicio !== '—' && !a.promoNombre && !window._availablePromo) {
+          if (a.servicio && a.servicio !== '—' && !a.promoNombre && !takeCtx.availablePromo) {
             const price = a.total || 0;
             let _svcNom2 = a.servicio;
             if (_svcNom2.trim().startsWith('{')) {
@@ -3846,14 +3990,14 @@
           }
 
           // Limpiar promo residual si este servicio no tiene promo
-          if (!window._availablePromo) {
+          if (!takeCtx.availablePromo) {
             const clientKeyClean2 = normalizeClientKey(a.nombre);
             if (activePromos[clientKeyClean2]) delete activePromos[clientKeyClean2];
           }
           
           // Si viene con promo asignada, guardarla pero permitir cambiarla
-          if (window._availablePromo) {
-            const promoBasic = window._availablePromo;
+          if (takeCtx.availablePromo) {
+            const promoBasic = takeCtx.availablePromo;
             
             // Buscar la promo completa en PROMOS
             const promoFull = PROMOS.find(p => p.name === promoBasic.name);
@@ -3925,6 +4069,7 @@
               // MODERNO solo completado/por_verificar/cobrado; legacy intacto.
               if (a.serviciosDetalle && a.serviciosDetalle.length > 0) {
                 window._desgloseAcumulado = a.serviciosDetalle;
+                window._desgloseAcumuladoPorSlot[2] = a.serviciosDetalle;
                 const svcListEl2 = document.getElementById('as2ServicesList');
                 if (svcListEl2) {
                   const _paraHistorial2 = (_restauradoP2 && _restauradoP2.esModerno)
@@ -3989,7 +4134,7 @@
               }
 
               // Mostrar banner de promasExtra si hay mas promos pendientes
-              const promasExtraActuales2 = window._takingPromasExtra || [];
+              const promasExtraActuales2 = takeCtx.promasExtra || [];
               if (promasExtraActuales2.length > 0) {
                 const extraDiv2 = document.createElement('div');
                 extraDiv2.id = 'promoExtraInfo2';
@@ -4862,6 +5007,17 @@
     pintarNombre('confirmSvcClientName', clientName, (slot === 1 ? window._as1Client : window._as2Client), false);
     window._confirmSvcSlot = slot;
 
+    // Restaurar SIEMPRE el estado por defecto de los 3 botones estáticos y
+    // ocultar el panel LINEAS antes de decidir qué rama mostrar — evita que
+    // un ticket LEGACY/TM abierto después de uno LINEAS herede botones
+    // ocultos o el panel de la vez anterior.
+    const _btnConfirmarDefault = document.querySelector('#confirmServiceModal button[onclick="confirmServiceAndClose()"]');
+    if (_btnConfirmarDefault) _btnConfirmarDefault.style.display = '';
+    const _btnCancelarDefault = document.querySelector('#confirmServiceModal button[onclick="closeModal()"]');
+    if (_btnCancelarDefault) _btnCancelarDefault.style.display = '';
+    const _panelLineasDefault = document.getElementById('confirmSvcLineasPanel');
+    if (_panelLineasDefault) _panelLineasDefault.style.display = 'none';
+
     // ── TM: SIEMPRE traer el grupo completo fresco antes de renderizar el modal.
     //    Las áreas solo se precargaban en loadClientAfterTake (post-toma), así que
     //    la 2ª staff recién asignada por Mikaela veía el modal VACÍO. Ahora se
@@ -4936,7 +5092,13 @@
     window[_tmReadyKey] = false;
 
     // Si hay desglose previo (promo compartida), mostrarlo en el modal
-    const desgloseHtml = (window._desgloseAcumulado || []).map(function(d) {
+    // P1.5 (corrección aislamiento slot1/slot2) — leer EXCLUSIVAMENTE el
+    // desglose del slot recibido como parámetro, nunca la global compartida
+    // window._desgloseAcumulado (que sigue existiendo y escribiéndose por
+    // compatibilidad con otros consumidores, pero ya no es la fuente que
+    // este modal usa).
+    const _desgloseSlot = (window._desgloseAcumuladoPorSlot && window._desgloseAcumuladoPorSlot[slot]) || [];
+    const desgloseHtml = _desgloseSlot.map(function(d) {
       return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--success-bg);border-radius:10px;margin-bottom:6px;">'
         + '<span style="font-size:14px;">&#x2705;</span>'
         + '<div style="flex:1;font-size:11px;font-weight:700;color:var(--success);">' + (d.servicio||d.area||'Servicio previo') + ' &middot; ' + (d.staff||'') + '</div>'
@@ -4945,6 +5107,20 @@
     }).join('');
 
     const tmAreasSlot = slot === 2 ? window._tmAreasActuales2 : window._tmAreasActuales;
+    const _detalleLineasSlot = slot === 2 ? window._as2ServiciosDetalleLineas : window._as1ServiciosDetalleLineas;
+    const esLineas = Array.isArray(_detalleLineasSlot);
+
+    // ── Corrección UX única — LINEAS (única confirmación) ────────────────
+    // TM queda fuera del diseño (aclaración de arquitectura: TM es legacy
+    // histórico, no modelo para este flujo). Rama propia, simple, basada
+    // exclusivamente en serviciosDetalle + lineaId — nunca reutiliza
+    // activePromos/promoData.division ni las mutaciones/arquitectura TM.
+    if (esLineas) {
+      _renderConfirmSvcLineasPanel_(slot, _detalleLineasSlot, idEspera);
+      document.getElementById('confirmServiceModal').classList.add('active');
+      return;
+    }
+
     if (esTM && tmAreasSlot) {
       // ── TICKET MULTI: mostrar TODAS las áreas con checkboxes ──
       // La staff puede marcar cuáles va a hacer ella (toma todas las marcadas de una vez)
@@ -5039,7 +5215,7 @@
       document.getElementById('confirmSvcCambiarBtn').style.display = '';
       document.getElementById('confirmSvcTitle').textContent = '🎯 Ticket multi-servicio';
     } else {
-      const esCompartida = window._desgloseAcumulado && window._desgloseAcumulado.length > 0;
+      const esCompartida = _desgloseSlot.length > 0;
       if (esCompartida && desgloseHtml) {
         document.getElementById('confirmSvcName').innerHTML = desgloseHtml
           + '<div style="padding:8px 10px;border:2px solid var(--info);border-radius:10px;margin-top:4px;">'
@@ -5058,6 +5234,260 @@
     }
 
     document.getElementById('confirmServiceModal').classList.add('active');
+  }
+
+  // ── Corrección UX única — LINEAS: panel propio del modal canónico ────────
+  // Nunca usa activePromos/promoData.division/nombres de área. Identidad
+  // exclusiva por lineaId (data-linea-id). Oculta los 3 botones estáticos
+  // (confirmServiceAndClose queda intacto para LEGACY, pero deshabilitado/
+  // oculto acá — cero fire-and-forget, cero doble POST) e inyecta un botón
+  // propio autocontenido.
+  function _renderConfirmSvcLineasPanel_(slot, detalle, ticketRef) {
+    const panelTM = document.getElementById('confirmSvcTMPanel');
+    const panelNormal = document.getElementById('confirmSvcNormalPanel');
+    if (panelTM) panelTM.style.display = 'none';
+    if (panelNormal) panelNormal.style.display = 'none';
+
+    const btnConfirmarStatic = document.querySelector('#confirmServiceModal button[onclick="confirmServiceAndClose()"]');
+    if (btnConfirmarStatic) btnConfirmarStatic.style.display = 'none';
+    const btnCambiarStatic = document.getElementById('confirmSvcCambiarBtn');
+    if (btnCambiarStatic) btnCambiarStatic.style.display = 'none';
+    const btnCancelarStatic = document.querySelector('#confirmServiceModal button[onclick="closeModal()"]');
+    if (btnCancelarStatic) btnCancelarStatic.style.display = 'none';
+
+    const titleEl = document.getElementById('confirmSvcTitle');
+    if (titleEl) titleEl.textContent = '📋 Servicio asignado';
+
+    let panel = document.getElementById('confirmSvcLineasPanel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'confirmSvcLineasPanel';
+      if (panelNormal && panelNormal.parentNode) panelNormal.parentNode.insertBefore(panel, panelNormal.nextSibling);
+    }
+    panel.style.display = 'block';
+
+    let bodyHtml;
+    if (detalle.length <= 1) {
+      // 1 componente (o 0) → sin selector, igual que el modal simple actual.
+      const d0 = detalle[0] || {};
+      bodyHtml =
+        '<div style="background:var(--bg);border-radius:14px;padding:14px;margin-bottom:12px;border:1.5px solid var(--line);">'
+        + '<div style="font-size:11px;color:var(--ink-faint);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Servicio asignado</div>'
+        + '<div style="font-size:14px;font-weight:700;color:var(--ink);margin-bottom:4px;">' + _escHtml_(d0.servicio || d0.area || 'Servicio') + '</div>'
+        + '<div style="font-size:22px;font-weight:900;color:var(--accent-deep);">' + (Number(d0.monto || 0) > 0 ? '$' + d0.monto : '—') + '</div>'
+        + '</div>'
+        + '<div style="font-size:13px;color:var(--ink-soft);line-height:1.5;text-align:center;">Asesorá a la clienta y confirmá el servicio.</div>';
+    } else {
+      // ── Auditoría 3 (corrección) — categorizar por estado REAL, nunca
+      // pintar todo `detalle` como checkbox marcado. Una segunda staff que
+      // abra este mismo ticket con L1/L2 ya completadas por otra persona
+      // debe verlas de solo lectura, nunca como seleccionables de nuevo.
+      const _staffActual = String((window.currentUser && window.currentUser.name) || '').trim().toLowerCase();
+      const itemsHtml = detalle.map(function (d) {
+        const lid = String(d.id || d.lineaId || '');
+        const nombre = _escHtml_(d.servicio || d.area || 'Servicio');
+        const monto = Number(d.monto || 0);
+        const st = String(d.estado || '').trim().toLowerCase();
+        const staffLinea = String(d.staff || '').trim();
+        const esMia = !staffLinea || staffLinea.toLowerCase() === _staffActual;
+
+        if (st === 'completado') {
+          return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--success-bg);border-radius:12px;margin-bottom:8px;opacity:0.85;">'
+            + '<span style="font-size:16px;">✅</span>'
+            + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--success);">' + nombre + '</div><div style="font-size:11px;color:var(--success);">Completado' + (staffLinea ? ' · ' + _escHtml_(staffLinea) : '') + '</div></div>'
+            + '<div style="font-size:13px;font-weight:800;color:var(--success);">$' + monto + '</div>'
+            + '</div>';
+        }
+        if (st === 'anulado') {
+          return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:12px;margin-bottom:8px;opacity:0.5;">'
+            + '<span style="font-size:16px;">🚫</span>'
+            + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--ink-faint);text-decoration:line-through;">' + nombre + '</div><div style="font-size:11px;color:var(--ink-faint);">Anulado</div></div>'
+            + '</div>';
+        }
+        if (st === 'en_servicio' && esMia) {
+          return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--info-bg);border-radius:12px;margin-bottom:8px;">'
+            + '<span style="font-size:16px;">▶️</span>'
+            + '<div style="flex:1;"><div style="font-size:13px;font-weight:800;color:var(--info);">' + nombre + '</div><div style="font-size:11px;color:var(--info);">Ya en curso</div></div>'
+            + '<div style="font-size:13px;font-weight:800;color:var(--info);">$' + monto + '</div>'
+            + '</div>';
+        }
+        if (!esMia) {
+          // en_servicio o esperando, pero asignada a otra staff — bloqueada.
+          return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:12px;margin-bottom:8px;border:1.5px dashed var(--line);opacity:0.6;">'
+            + '<span style="font-size:16px;">🔒</span>'
+            + '<div style="flex:1;"><div style="font-size:13px;font-weight:700;color:var(--ink-soft);">' + nombre + '</div><div style="font-size:11px;color:var(--ink-faint);">Para ' + _escHtml_(staffLinea || 'otra staff') + '</div></div>'
+            + '<div style="font-size:13px;font-weight:800;color:var(--ink-faint);">$' + monto + '</div>'
+            + '</div>';
+        }
+        // esperando + mía (o sin staff asignada) → única categoría realmente seleccionable.
+        return '<label style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--info-bg);border-radius:12px;margin-bottom:8px;cursor:pointer;border:2px solid var(--info);">'
+          + '<input type="checkbox" checked data-linea-id="' + lid + '" style="width:18px;height:18px;accent-color:var(--info);flex-shrink:0;">'
+          + '<div style="flex:1;"><div style="font-size:13px;font-weight:800;color:var(--info);">' + nombre + '</div></div>'
+          + '<div style="font-size:13px;font-weight:800;color:var(--info);">$' + monto + '</div>'
+          + '</label>';
+      }).join('');
+      bodyHtml =
+        '<div style="font-size:11px;color:var(--ink-faint);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">Servicios del ticket</div>'
+        + '<div id="confirmSvcLineasItems">' + itemsHtml + '</div>'
+        + '<div style="font-size:12px;color:var(--ink-soft);line-height:1.5;text-align:center;background:var(--bg);border-radius:12px;padding:10px;margin-top:4px;">Marcá los servicios que vas a realizar. Los que no marques quedan en espera para otra staff.</div>';
+    }
+
+    panel.innerHTML = bodyHtml
+      + '<button id="confirmSvcLineasBtn" class="btn-primary" style="width:100%;margin-top:14px;margin-bottom:10px;background:var(--success);" onclick="_confirmarServicioLineas_(' + slot + ')">✅ Confirmar servicio</button>'
+      + '<button class="btn-primary outline" style="width:100%;" onclick="_cancelarServicioLineas_(' + slot + ')">❌ Cancelar servicio</button>';
+  }
+
+  function _escHtml_(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Anti doble-click — una sola operación efectiva en curso a la vez (por slot).
+  window._confirmSvcLineasEnCurso = window._confirmSvcLineasEnCurso || {};
+
+  async function _confirmarServicioLineas_(slot) {
+    if (window._confirmSvcLineasEnCurso[slot]) return; // condición E — doble toque
+    const ticketRef = slot === 2 ? window._as2IdEspera : window._as1IdEspera;
+    const detalle = slot === 2 ? window._as2ServiciosDetalleLineas : window._as1ServiciosDetalleLineas;
+    const user = window.currentUser;
+    const staffN = user ? user.name : '';
+    if (!ticketRef || !Array.isArray(detalle) || !staffN) {
+      alert('⚠️ Error interno: datos de la atención perdidos. Avisá a soporte.');
+      return;
+    }
+
+    // Selección solo se envía si HAY selector (2+ componentes). Con 1 sola
+    // línea, componentesSeleccionados queda AUSENTE (nunca [] — el backend
+    // certificado trata [] como SELECCION_VACIA).
+    let seleccion = null;
+    if (detalle.length > 1) {
+      const checks = document.querySelectorAll('#confirmSvcLineasItems input[type="checkbox"]:checked');
+      seleccion = Array.prototype.map.call(checks, function (cb) { return cb.dataset.lineaId; }).filter(Boolean);
+      if (seleccion.length === 0) {
+        alert('Seleccioná al menos un servicio para continuar.');
+        return; // bloqueo frontend — cero apiPost (condición D)
+      }
+    }
+
+    const payload = { idEspera: ticketRef, chicaNombre: staffN };
+    if (Array.isArray(seleccion)) payload.componentesSeleccionados = seleccion;
+
+    window._confirmSvcLineasEnCurso[slot] = true;
+    const btn = document.getElementById('confirmSvcLineasBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
+
+    let result;
+    try {
+      result = await apiPost('tomarClienta', payload, { retries: 0, timeoutMs: 15000 });
+    } catch (err) {
+      console.error('[confirmarServicioLineas] error de red:', err);
+      alert('Error al confirmar el servicio. Intentá de nuevo.');
+      window._confirmSvcLineasEnCurso[slot] = false;
+      if (btn) { btn.disabled = false; btn.textContent = '✅ Confirmar servicio'; }
+      return; // condición E — modal y selección quedan intactos para reintentar
+    }
+    window._confirmSvcLineasEnCurso[slot] = false;
+
+    if (!result || result.success !== true) {
+      const msg = (result && result.message) || 'No se pudo confirmar el servicio.';
+      alert(msg);
+      if (btn) { btn.disabled = false; btn.textContent = '✅ Confirmar servicio'; }
+      return; // no cerrar modal, no reconstruir nada como exitoso (condición E)
+    }
+
+    // ── Éxito — reconstrucción SOLO con lo que el backend reporta realmente
+    // iniciado (condición F). Nunca asumir que la selección completa se
+    // inició si el backend reporta una diferencia. ─────────────────────────
+    // ── Problema 2 (corrección) — fail-closed, sin fallback a "detalle
+    // completo". Si el backend no trae result.iniciadas como array,
+    // opción B (preferida): lectura fresca de LINEAS, construir
+    // EXCLUSIVAMENTE desde estado==='en_servicio' && staff===staff actual,
+    // identidad por lineaId real. Nunca asumir que todo lo seleccionado
+    // se inició. ──────────────────────────────────────────────────────────
+    let idsIniciados = Array.isArray(result.iniciadas) ? result.iniciadas : null;
+    if (!idsIniciados) {
+      console.warn('[confirmarServicioLineas] backend no devolvió result.iniciadas — releyendo LINEAS fresco', result);
+      try {
+        const _relect = await apiGet('getTicketLineas', { ticketRef: ticketRef });
+        const _lineasFrescas = (_relect && _relect.success === true && Array.isArray(_relect.lineasActivas))
+          ? _relect.lineasActivas : [];
+        idsIniciados = _lineasFrescas
+          .filter(function (l) {
+            return String(l.estado || '').trim() === 'en_servicio'
+              && String(l.staff || '').trim().toLowerCase() === staffN.toLowerCase();
+          })
+          .map(function (l) { return l.id || l.lineaId; })
+          .filter(Boolean);
+      } catch (eRelect) {
+        console.error('[confirmarServicioLineas] error en relectura fail-closed:', eRelect);
+        alert('⚠️ El servicio se inició pero no pudimos confirmar cuáles componentes. Recargá la página antes de continuar.');
+        if (btn) { btn.disabled = false; btn.textContent = '✅ Confirmar servicio'; }
+        return; // no cerrar modal, no construir slotServices con datos sin verificar
+      }
+    }
+    const _base = detalle.filter(function (d) { return idsIniciados.indexOf(d.id || d.lineaId) !== -1; });
+    slotServices[slot] = _base.map(function (d) {
+      return { name: d.servicio || d.area || 'Servicio', area: d.area || '', price: Number(d.monto || 0), status: 'activo' };
+    });
+
+    // UI de atención activa — datos ya conocidos con certeza desde openTake,
+    // sin depender de un round-trip a getAtenciones ni de heurísticas de slot.
+    // Por-slot EXCLUSIVO — nunca window._takingClient/_takingClientCode
+    // (globales compartidas que openTake sobrescribe para CUALQUIER slot,
+    // incluido el otro slot si se abrió sin confirmar mientras este modal
+    // seguía abierto).
+    const clientName = (slot === 2 ? window._as2ClientNameLineas : window._as1ClientNameLineas) || '';
+    const clientCode = (slot === 2 ? window._as2Client : window._as1Client) || '';
+    const initials = String(clientName).split(' ').map(function (n) { return n[0]; }).join('').slice(0, 2).toUpperCase();
+    const avEl = document.getElementById('as' + slot + 'Avatar');
+    if (avEl) avEl.textContent = initials;
+    if (typeof pintarNombre === 'function') pintarNombre('as' + slot + 'Name', clientName, clientCode, false);
+    const codeEl = document.getElementById('as' + slot + 'Code');
+    if (codeEl) codeEl.textContent = clientCode;
+    const totalTxt = '$' + slotServices[slot].reduce(function (s, x) { return s + Number(x.price || 0); }, 0);
+    const totEl = document.getElementById('as' + slot + 'Total');
+    if (totEl) totEl.textContent = totalTxt;
+    const cntEl = document.getElementById('as' + slot + 'SvcCount');
+    if (cntEl) cntEl.textContent = String(slotServices[slot].length);
+    if (typeof renderServicesForSlot === 'function') renderServicesForSlot(slot);
+
+    _limpiarEstadoServicioLineas_(slot); // limpia detalle/selección/PreToma — pisa FuenteCanonica/FuenteLineas a null/false también
+    window['_as' + slot + 'FuenteCanonica'] = 'LINEAS'; // D7.1 — recién ACÁ, después de limpiar: confirmado con éxito por el backend nativo
+    window['_as' + slot + 'FuenteLineas'] = true; // espejo de compatibilidad, derivado de FuenteCanonica
+    closeModal();
+    setTimeout(function () { try { updateFinishButtons(slot); } catch (e) {} }, 300);
+  }
+  window._confirmarServicioLineas_ = _confirmarServicioLineas_;
+
+  function _cancelarServicioLineas_(slot) {
+    // Problema 1 (corrección) — restaurar el slot al estado EXACTO previo a
+    // openTake (guardado en window._as{slot}PreTomaLineas). Si no había
+    // nada, queda vacío; si había una atención real, se restaura íntegra.
+    const pre = window['_as' + slot + 'PreTomaLineas'];
+    if (pre) {
+      window['_as' + slot + 'IdEspera'] = pre.idEspera;
+      window['_as' + slot + 'Client'] = pre.client;
+    }
+    window['_as' + slot + 'PreTomaLineas'] = null;
+    _limpiarEstadoServicioLineas_(slot);
+    closeModal();
+  }
+  window._cancelarServicioLineas_ = _cancelarServicioLineas_;
+
+  // Condición A — limpieza de estado temporal, sin contaminar el otro slot.
+  function _limpiarEstadoServicioLineas_(slot) {
+    if (slot === 2) {
+      window._as2ServiciosDetalleLineas = null;
+      window._as2LineasSeleccion = null;
+      window._as2ClientNameLineas = null;
+    } else {
+      window._as1ServiciosDetalleLineas = null;
+      window._as1LineasSeleccion = null;
+      window._as1ClientNameLineas = null;
+    }
+    window['_as' + slot + 'FuenteCanonica'] = null; // D7.1
+    window['_as' + slot + 'FuenteLineas'] = false; // espejo de compatibilidad
+    window['_as' + slot + 'PreTomaLineas'] = null; // ya confirmado o cancelado — nada que restaurar
+    window._confirmSvcLineasEnCurso[slot] = false;
   }
 
 
