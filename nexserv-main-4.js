@@ -1832,13 +1832,247 @@
     `).join('');
   }
 
-  function applyPromoFromAddSvc(promoIdx) {
+  // ── D7.1 Fase 2B — Bloque B: normalizador de nombre de servicio ──────────
+  // Espejo EXACTO de _lnNormTextoSust_ (NexServ_Lineas.gs): minúsculas, sin
+  // acentos, espacios colapsados. Se usa SOLO para localizar el índice del
+  // componente origen dentro de la división de la promo — el mismo criterio
+  // que aplica _lnPromoContieneServicioOrigenInterno_ en el backend. No
+  // decide precios, áreas ni servicios: eso lo resuelve el backend contra
+  // Paquetes.
+  function _normTextoSustFront_(s) {
+    var x = String(s || '').trim().toLowerCase();
+    try { x = x.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) {}
+    return x.split(' ').filter(function (p) { return p !== ''; }).join(' ');
+  }
+
+  // ── D7.1 Fase 2B — Bloque B: reconstrucción del slot desde LINEAS ────────
+  // Relectura AUTORITATIVA tras una sustitución canónica exitosa. NO
+  // reconstruye la promo desde promoData.division: usa exclusivamente lo que
+  // LINEAS devuelve para este ticketRef, filtrado a en_servicio + staff
+  // actual. Solo toca el slot indicado.
+  //
+  // B.1 BLINDAJE — una respuesta no autoritativa (sin respuesta, success!==true,
+  // o lineasActivas que no es array) NO se degrada a "lista vacía": eso vaciaría
+  // el slot como si LINEAS hubiera confirmado cero líneas. Se lanza error y
+  // slotServices[slot] queda EXACTAMENTE como estaba. La mutación del slot
+  // ocurre únicamente DESPUÉS de validar la lectura.
+  async function _reconstruirSlotDesdeLineas_(slot, ticketRef) {
+    const user = window.currentUser;
+    const staffN = (user && user.name) || '';
+    const r = await apiGet('getTicketLineas', { ticketRef: ticketRef });
+
+    if (!r || r.success !== true || !Array.isArray(r.lineasActivas)) {
+      const _e = new Error('RELECTURA_LINEAS_NO_AUTORITATIVA');
+      _e.codigo = 'RELECTURA_LINEAS_NO_AUTORITATIVA';
+      _e.respuesta = r;
+      throw _e; // el slot NO se toca
+    }
+    const lineas = r.lineasActivas;
+
+    const mias = lineas.filter(function (l) {
+      return String(l.estado || '').trim() === 'en_servicio'
+        && String(l.staff || '').trim() === String(staffN).trim();
+    });
+
+    slotServices[slot] = mias.map(function (l) {
+      return {
+        name: l.servicio || l.area || 'Servicio',
+        area: l.area || '',
+        price: Number(l.monto || 0),
+        status: 'aprobado',
+        estado: String(l.estado || ''),
+        esPromo: (String(l.esPromo) === 'si' || l.esPromo === true),
+        promoRef: String(l.promoRef || ''),
+        lineaId: String(l.id || l.lineaId || ''),
+        _yaEnLinea: true
+      };
+    });
+
+    try { renderServicesForSlot(slot); } catch (e) {}
+    const _tot = slotServices[slot].reduce(function (s, v) { return s + Number(v.price || 0); }, 0);
+    const _tEl = document.getElementById('as' + slot + 'Total'); if (_tEl) _tEl.textContent = '$' + _tot;
+    const _cEl = document.getElementById('as' + slot + 'SvcCount'); if (_cEl) _cEl.textContent = String(slotServices[slot].length);
+    try { updateFinishButtons(slot); } catch (e) {}
+    return { lineas: lineas, mias: mias };
+  }
+
+  async function applyPromoFromAddSvc(promoIdx) {
     const promoData = (window._addSvcPromosList || PROMOS.filter(p => p.active))[promoIdx];
     if (!promoData) return;
     const slot = window._addServiceSlot || 1;
     const user = window.currentUser;
     const clientName = document.getElementById('as' + slot + 'Name')?.textContent?.replace(' ⭐','') || '';
     const clientKey = normalizeClientKey(clientName);
+
+    // ══════════════════════════════════════════════════════════════════════
+    // D7.1 Fase 2B — B.1-A: RUTEO EXPLÍCITO POR FUENTE CANÓNICA
+    // Congelada una sola vez para todo el resto de la función. Tres vías
+    // mutuamente excluyentes — DESCONOCIDA/null/undefined/cualquier otro
+    // valor NUNCA cae al camino legacy (contrato D7.1: DESCONOCIDA ≠ LEGACY).
+    // La fuente viene de a.fuenteReal (backend/TicketsFuente); jamás se
+    // infiere por prefijo del idEspera.
+    // ══════════════════════════════════════════════════════════════════════
+    const fuenteCanonica = window['_as' + slot + 'FuenteCanonica'];
+
+    if (fuenteCanonica !== 'LINEAS' && fuenteCanonica !== 'LEGACY') {
+      // FAIL CLOSED: cero escritores. No se toca slotServices, activePromos,
+      // metadata por slot, total ni contador. Modal permanece abierto.
+      console.warn('[applyPromoFromAddSvc] fuente no confirmada — cambio bloqueado. slot=', slot, 'fuente=', fuenteCanonica);
+      alert('⚠️ No se pudo confirmar el origen de este ticket. Recargá la app antes de cambiar el servicio.');
+      return;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // D7.1 Fase 2B — Bloque B: RAMA LINEAS (sustitución canónica nativa)
+    // Fuente canónica por slot ya establecida por D7.1 Fase 2 desde
+    // a.fuenteReal (backend/TicketsFuente). NUNCA se infiere por prefijo.
+    // Un solo escritor: sustituirServicioPorPromoStaffNativa. En esta rama
+    // NO se llama updateServiciosAtencion ni ninguna otra persistencia.
+    // ══════════════════════════════════════════════════════════════════════
+    if (fuenteCanonica === 'LINEAS') {
+      // 1) Congelar contexto del slot y releer el ticket fresco ANTES de mutar nada.
+      try { if (typeof ensureIdEsperaFresco === 'function') await ensureIdEsperaFresco(slot); } catch (e) {}
+      const ticketRefL = (slot === 1 ? (window._as1IdEspera || '') : (window._as2IdEspera || '')).trim();
+
+      // 2) Línea origen por IDENTIDAD EXACTA (lineaId), capturada ANTES de
+      //    tocar slotServices. Nunca por nombre, monto, clienta, área ni
+      //    posición. Debe existir EXACTAMENTE UNA candidata con lineaId real.
+      const _conId = (slotServices[slot] || []).filter(function (s) {
+        return s && String(s.lineaId || '').trim() !== '';
+      });
+
+      // 3) FAIL CLOSED: sin ticket, sin lineaId único, o sin staff → no se
+      //    llama al backend, no se muta UI, no se muestra éxito.
+      if (!ticketRefL) {
+        alert('⚠️ No se pudo identificar el ticket de esta atención. Recargá la app antes de cambiar el servicio.');
+        return;
+      }
+      if (_conId.length !== 1) {
+        console.warn('[applyPromoFromAddSvc][LINEAS] lineaOrigenId no resoluble — candidatas con lineaId:', _conId.length, slotServices[slot]);
+        alert(_conId.length === 0
+          ? '⚠️ No se pudo identificar la línea a sustituir (falta identidad de línea). Recargá la app e intentá de nuevo.'
+          : '⚠️ Hay más de un servicio activo en este slot: no se puede determinar cuál sustituir. Avisá a soporte.');
+        return;
+      }
+      if (!user || !user.name) {
+        alert('⚠️ Sesión no identificada. Volvé a iniciar sesión antes de cambiar el servicio.');
+        return;
+      }
+
+      const lineaOrigenIdL = String(_conId[0].lineaId).trim();
+      const servicioOrigenL = String(_conId[0].name || '');
+
+      // 4) componentes[]: posicional contra la división que el backend
+      //    resuelve desde Paquetes. El frontend NO fabrica precios, áreas ni
+      //    servicios — solo la identidad de staff por componente:
+      //      · componente que sustituye al origen → staff actual
+      //      · componentes de otras áreas         → staff vacía ('esperando')
+      //    El índice origen se localiza con el MISMO criterio del backend
+      //    (_lnPromoContieneServicioOrigenInterno_): nombre de servicio
+      //    normalizado. Si no se puede localizar, FAIL CLOSED — el backend
+      //    igual rechazaría con STAFF_REQUERIDO, pero no se lo hace viajar.
+      const _divL = Array.isArray(promoData.division) ? promoData.division : [];
+      if (_divL.length === 0) {
+        alert('⚠️ Esta promo no tiene división configurada. Avisá a soporte.');
+        return;
+      }
+      const _servOrigN = _normTextoSustFront_(servicioOrigenL);
+      let _idxOrigen = -1;
+      for (let i = 0; i < _divL.length; i++) {
+        if (_normTextoSustFront_(_divL[i].servicio) === _servOrigN) { _idxOrigen = i; break; }
+      }
+      if (_idxOrigen === -1) {
+        console.warn('[applyPromoFromAddSvc][LINEAS] servicio origen no está en la división de la promo', servicioOrigenL, _divL);
+        alert('⚠️ Esta promo no incluye el servicio actual de la clienta, así que no puede reemplazarlo. Elegí otra promo.');
+        return;
+      }
+      const componentesL = _divL.map(function (d, i) {
+        return { staff: (i === _idxOrigen) ? user.name : '', lineaPadre: '' };
+      });
+
+      // 5) requestId estable para ESTE intento (idempotencia del backend).
+      const _rqId = 'SUST-' + ticketRefL + '-' + lineaOrigenIdL + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
+      // 6) Un solo escritor. staffSolicitante NO se envía: el router la
+      //    inyecta desde la sesión firmada (exigirSesionFirmada_).
+      let rSust = null;
+      try {
+        rSust = await apiPost('sustituirServicioPorPromoStaffNativa', {
+          ticketRef      : ticketRefL,
+          lineaOrigenId  : lineaOrigenIdL,
+          promoCatalogoId: promoData.name,
+          requestId      : _rqId,
+          componentes    : componentesL,
+          obs            : 'Cambio de servicio a promo por ' + user.name
+        });
+      } catch (eS) {
+        console.error('[applyPromoFromAddSvc][LINEAS] error de red:', eS);
+        rSust = null;
+      }
+
+      // 7) CONTRATO REAL: el núcleo devuelve { ok:true, ... } — NO 'success'.
+      //    Se acepta 'success' solo como alias defensivo si el router lo
+      //    envolviera en el futuro. Cualquier otra cosa = fallo → estado del
+      //    slot INTACTO, sin toast de éxito, sin "promo aplicada".
+      const _okSust = !!(rSust && (rSust.ok === true || rSust.success === true));
+      if (!_okSust) {
+        const _err = (rSust && (rSust.error || rSust.message)) || 'no se pudo conectar con el servidor';
+        console.warn('[applyPromoFromAddSvc][LINEAS] sustitución NO aplicada:', _err, rSust);
+        alert('⚠️ No se pudo cambiar el servicio a la promo.\n\nMotivo: ' + _err + '.\n\nLa clienta sigue con su servicio actual — volvé a intentar. Si sigue fallando, avisá a Mikaela.');
+        return; // slotServices/total/contador/promo previa: intactos
+      }
+
+      // 8) Éxito de escritura → relectura AUTORITATIVA de LINEAS.
+      //    B.1-B: si la relectura NO es autoritativa, la sustitución YA pudo
+      //    haberse escrito en LINEAS — no se finge rollback, pero TAMPOCO se
+      //    presenta la pantalla como confirmada. Sin lectura autoritativa no
+      //    se reconstruye el slot, no se toca la metadata de promo, no se
+      //    cierra el modal como éxito y no se muestra "Promo aplicada".
+      //    Nunca se reintenta la sustitución ni se genera un segundo
+      //    requestId: eso arriesgaría una doble escritura.
+      let _recon = null;
+      try {
+        _recon = await _reconstruirSlotDesdeLineas_(slot, ticketRefL);
+      } catch (eR) {
+        console.error('[applyPromoFromAddSvc][LINEAS] relectura NO autoritativa tras sustitución escrita:', eR);
+        alert('⚠️ El cambio fue registrado en LINEAS, pero no pudimos actualizar esta pantalla.\n\n'
+            + 'Recargá la app antes de continuar para ver el estado real del ticket.');
+        return; // slot intacto, sin metadata nueva, sin toast, modal abierto
+      }
+
+      // 9) Metadata de promo POR SLOT (contrato D7.1 Objetivo 3). Solo se
+      //    escribe con relectura autoritativa confirmada. El global
+      //    _availablePromo queda como espejo legacy, nunca decide.
+      window._availablePromosPerSlot = window._availablePromosPerSlot || {};
+      window._availablePromosPerSlot[slot] = {
+        name: promoData.name,
+        price: Number(promoData.price || 0),
+        regular: Number(promoData.regular || promoData.price || 0)
+      };
+
+      closeModal();
+      showToast('🏷 Promo "' + promoData.name + '" aplicada');
+
+      // 10) Aviso a Mikaela si quedaron componentes esperando para otra staff.
+      //     Se decide por el estado REAL de LINEAS, no por catálogo.
+      try {
+        const _pend = ((_recon && _recon.lineas) || []).filter(function (l) {
+          return String(l.estado || '').trim() === 'esperando';
+        });
+        if (_pend.length > 0) {
+          const _faltan = _pend.map(function (l) { return l.area || l.servicio || ''; })
+            .filter(function (v, i, a) { return v && a.indexOf(v) === i; }).join(', ');
+          enviarPushStaff(['Mikaela'], '🔄 Cambio de servicio',
+            (user.name || 'Una chica') + ' cambió a ' + clientName + ' a la promo "' + promoData.name + '". Falta asignar: ' + _faltan + '.');
+          showToast('🔄 Avisado a Mikaela: falta asignar ' + _faltan);
+        }
+      } catch (e) { console.warn('[applyPromoFromAddSvc][LINEAS] aviso Mikaela:', e); }
+      return; // ← la rama LINEAS termina acá. NUNCA cae al camino legacy.
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // RAMA LEGACY — comportamiento previo EXACTO, sin cambios.
+    // ══════════════════════════════════════════════════════════════════════
     const idEspera = slot === 1 ? window._as1IdEspera : window._as2IdEspera;
 
     // Limpiar servicios anteriores del slot y aplicar la promo
