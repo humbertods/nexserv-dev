@@ -5426,7 +5426,12 @@
     }
     const _base = detalle.filter(function (d) { return idsIniciados.indexOf(d.id || d.lineaId) !== -1; });
     slotServices[slot] = _base.map(function (d) {
-      return { name: d.servicio || d.area || 'Servicio', area: d.area || '', price: Number(d.monto || 0), status: 'activo' };
+      // H4 — `lineaId` es la identidad exacta de la fila LINEAS de ESTE
+      // componente. El filtro de arriba ya la usa para decidir qué entra;
+      // antes se descartaba en este map, dejando el slot sin identidad hasta
+      // el siguiente refresh completo. Operaciones nativas posteriores
+      // (sustitución a promo, finalización parcial) la necesitan.
+      return { name: d.servicio || d.area || 'Servicio', area: d.area || '', price: Number(d.monto || 0), status: 'activo', lineaId: String(d.id || d.lineaId || '') };
     });
 
     // UI de atención activa — datos ya conocidos con certeza desde openTake,
@@ -5454,6 +5459,25 @@
     window['_as' + slot + 'FuenteCanonica'] = 'LINEAS'; // D7.1 — recién ACÁ, después de limpiar: confirmado con éxito por el backend nativo
     window['_as' + slot + 'FuenteLineas'] = true; // espejo de compatibilidad, derivado de FuenteCanonica
     closeModal();
+    // ── H1/H2 — TRANSICIÓN VISUAL POST-SUCCESS ───────────────────────────
+    // Hasta acá el slot quedó reconstruido y pintado, pero la pantalla activa
+    // seguía siendo la lista de espera: el flujo tradicional obtiene la
+    // transición dentro de loadClientAfterTake(), que esta ruta nativa NO
+    // ejecuta (a propósito: evita un round-trip extra a getAtenciones y una
+    // segunda reconstrucción por otra vía).
+    //
+    // Se reutiliza el helper certificado show() (router.js) — nunca se copia
+    // su lógica DOM ni se llama loadClientAfterTake(). show() solo alterna
+    // clases sobre elementos .screen y NO ejecuta ningún POST; sus efectos
+    // asociados (restoreActivePromos, recargarAutorizacionesStaff y, solo
+    // para TM-, un apiGet) son lecturas. Las rutas de ese callback que
+    // repueblan slotServices están guardadas por "slot vacío", así que no
+    // pisan la reconstrucción con lineaId que se acaba de hacer.
+    //
+    // ORDEN: después de closeModal() — son ortogonales (closeModal solo toca
+    // .modal-bg; show solo toca .screen), así que ninguno puede ocultar el
+    // efecto del otro. Se respeta la secuencia del contrato.
+    await show(slot === 2 ? 'activeService2' : 'activeService');
     setTimeout(function () { try { updateFinishButtons(slot); } catch (e) {} }, 300);
   }
   window._confirmarServicioLineas_ = _confirmarServicioLineas_;
