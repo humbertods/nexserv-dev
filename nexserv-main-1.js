@@ -5855,6 +5855,33 @@ window._esPilotoTicketLineas = function(codigo) {
 // Ticket madre a partir de un idEspera que puede venir con slot (TM-0459:2 → TM-0459).
 function _ticketBaseId(id) { return String(id || '').replace(/:.*$/, ''); }
 window._ticketBaseId = _ticketBaseId;
+
+// ── HOTFIX DEV — resolución canónica de la referencia de ticket ──────────────
+// Proveedor de la referencia que openTake() ya consumía (rama fuente=LINEAS)
+// pero que nunca llegó a definirse: el guard `typeof _refTicketFrontend_ ===
+// 'function'` daba false y todo ticket nativo caía en
+// REFERENCIA_TICKET_AUSENTE aunque su identidad estuviera intacta
+// (caso observado en DEV: SP-0292 / C-0874, fuente=LINEAS).
+//
+// Contrato de precedencia — primera referencia NO VACÍA, en este orden:
+//   1. w.ticket_ref   (lo emite el overlay nativo _agregarTicketsNativosDesdeLineas_)
+//   2. w.idEspera
+//   3. w.id
+// El valor resultante se normaliza con _ticketBaseId() para descartar el
+// sufijo de slot (TM-0459:2 → TM-0459) y quedarse con el ticket madre.
+//
+// FAIL CLOSED: sin ninguna identidad real devuelve '' — nunca fabrica una
+// referencia ni la infiere por cliente, código, servicio, área ni posición
+// en el array. El guard de openTake sigue siendo el que corta.
+function _refTicketFrontend_(w) {
+  if (!w) return '';
+  var raw = String(w.ticket_ref || '').trim()
+         || String(w.idEspera   || '').trim()
+         || String(w.id         || '').trim();
+  if (!raw) return '';
+  return String(_ticketBaseId(raw) || '').trim();
+}
+window._refTicketFrontend_ = _refTicketFrontend_;
 // Mapea la respuesta de getTicketLineas (lineasActivas) al shape que el modal ya sabe
 // pintar: cada "área" del modal = una línea. puedeEditar→check, !puedeEditar→candado 🔒.
 function _lineasLineasAAreasModal(r) {
