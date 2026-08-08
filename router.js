@@ -176,7 +176,19 @@
         }
 
         // ── PROMO (SP / no-TM): restaurar desde activePromos o backend ─────────
-        if (clientName && activePromos[clientKey] && (!slotServices[1] || slotServices[1].length === 0)) {
+        // P2 — BLINDAJE LINEAS: estas dos ramas reconstruyen el slot desde
+        // fuentes legacy/agregadas (activePromos, getListaCompleta, catálogo
+        // PROMOS, getMyPromoPrice). Para un slot cuya FuenteCanonica es
+        // 'LINEAS', el detalle autoritativo son las líneas reales de LINEAS
+        // (con su lineaId por componente) — colapsarlas en un único renglón
+        // de promo destruye identidad y montos por línea.
+        // Se exigen DOS condiciones, no solo "slot vacío": aunque el slot
+        // esté temporalmente vacío, un slot LINEAS NUNCA se repuebla desde
+        // legacy — debe esperar su fuente autoritativa
+        // (restaurarServiciosNormalesSlot, más abajo, que sí lee LINEAS vía
+        // _serviciosDetalleActivosParaStaff_ y preserva lineaId).
+        const _esLineas1 = (window._as1FuenteCanonica === 'LINEAS');
+        if (!_esLineas1 && clientName && activePromos[clientKey] && (!slotServices[1] || slotServices[1].length === 0)) {
           const _promo = activePromos[clientKey].promo;
           const _price = getMyPromoPrice(_promo, user1?.area || 'cejas');
           slotServices[1] = [{ name: _promo.name, price: _price, area: user1?.area || 'cejas' }];
@@ -184,7 +196,8 @@
           document.getElementById('as1Total').textContent = '$' + _price;
           document.getElementById('as1SvcCount').textContent = '1';
           updateFinishButtons(1);
-        } else if (clientName && !activePromos[clientKey] && PROMOS.length > 0) {
+        } else if (!_esLineas1 && (!slotServices[1] || slotServices[1].length === 0)
+                   && clientName && !activePromos[clientKey] && PROMOS.length > 0) {
           try {
             const r = await apiGet('getListaCompleta');
             if (r.success) {
@@ -286,7 +299,12 @@
         }
 
         // PROMO: restaurar desde activePromos si el slot quedó vacío
-        if (clientName2 && activePromos[clientKey2] && (!slotServices[2] || slotServices[2].length === 0)) {
+        // P2 — BLINDAJE LINEAS (mismo contrato que slot 1, ver nota allá).
+        // Slot 2 no tiene la rama getListaCompleta/PROMOS que sí existe en
+        // slot 1, así que esta es la única reconstrucción legacy capaz de
+        // pisar un slot LINEAS acá.
+        const _esLineas2 = (window._as2FuenteCanonica === 'LINEAS');
+        if (!_esLineas2 && clientName2 && activePromos[clientKey2] && (!slotServices[2] || slotServices[2].length === 0)) {
           const _promo2 = activePromos[clientKey2].promo;
           const _price2 = getMyPromoPrice(_promo2, user2?.area || 'cejas', activePromos[clientKey2].completedAreas || []);
           slotServices[2] = [{ name: _promo2.name, price: _price2, area: user2?.area || 'cejas' }];
