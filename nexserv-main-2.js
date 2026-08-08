@@ -299,32 +299,24 @@
     const data = window._finishingData;
     const slot = window._finishingSlot || 1;
     await ensureIdEsperaFresco(slot); // ROBUSTEZ: resolver id fresco si el local está vacío
-    const clienteCodigoSlot =
-      (slot === 2 ? window._as2Client : window._as1Client) || '';
 
     // ── PASO 1: Determinar el idEspera real del ticket activo ──────────────────
-    let idEsperaActual = data.idEspera
-      || (slot === 2 ? window._as2IdEspera : window._as1IdEspera)
-      || '';
+    let idEsperaActual = data.idEspera || window._as1IdEspera || '';
     let miTicketSheet = null;
 
     // Buscar en ServicioPromo si es SP- o vacío
     if (!idEsperaActual || idEsperaActual.startsWith('SP-')) {
       try {
-        const spData = await LineaService.obtenerPorCobrarSP(idEsperaActual);
+        const spData = await LineaService.obtenerPorCobrarSP(idEsperaActual || idEspera2 || '');
         if (spData.success) {
           const todosLosTickets = [...(spData.enServicio || []), ...(spData.porCobrar || [])];
           miTicketSheet = todosLosTickets.find(t =>
             t.tomadaPor === user?.name &&
-            (t.nombre === data.clientName || t.codigo === (data.clienteCodigo || clienteCodigoSlot))
+            (t.nombre === data.clientName || t.codigo === (data.clienteCodigo || window._as1Client))
           );
           if (miTicketSheet) {
             idEsperaActual = miTicketSheet.idEspera;
-            if (slot === 2) {
-              window._as2IdEspera = idEsperaActual;
-            } else {
-              window._as1IdEspera = idEsperaActual;
-            }
+            window._as1IdEspera = idEsperaActual;
           }
         }
       } catch(e) {}
@@ -335,7 +327,7 @@
     // El SN- original no tiene serviciosDetalle de Lesly — está en el SP- creado por continuarPromoALista
     if (idEsperaActual.startsWith('SN-') && !miTicketSheet) {
       try {
-        const spData2 = await LineaService.obtenerPorCobrarSP(idEsperaActual);
+        const spData2 = await LineaService.obtenerPorCobrarSP(idEsperaActual || idEspera2 || '');
         if (spData2.success) {
           // IMPORTANTE: solo SP "en servicio". Un SP que ya está "por cobrar" está finalizado
           // y NO es el ticket de un enganche en curso. Incluir los "por cobrar" hacía que un
@@ -348,7 +340,7 @@
           // Sin este filtro, el SN de María (piernas $30) encontraba el SP de Laura (facial $32)
           // para la misma clienta, sumaba los montos y mostraba precio incorrecto en cobro grupal.
           const linkedSP = allSP.find(t =>
-            (t.nombre === data.clientName || t.codigo === (data.clienteCodigo || clienteCodigoSlot)) &&
+            (t.nombre === data.clientName || t.codigo === (data.clienteCodigo || window._as1Client)) &&
             t.serviciosDetalle && t.serviciosDetalle.length > 0 &&
             t.serviciosDetalle.some(d => d.staff === (user && user.name))
           );
@@ -431,7 +423,10 @@
     }
 
     // 2) Agregar desglose acumulado en memoria (partes de enganche anteriores parseadas de obs)
-    (window._desgloseAcumulado || []).forEach(d => {
+    // D7.1 Objetivo 4 — leer del store POR SLOT, no del global _desgloseAcumulado
+    // compartido (ese global es el que se pisaba entre slot1/slot2 cuando
+    // ambos atravesaban un enganche en paralelo — hallazgo D7 Hallazgo 4).
+    ((window._desgloseAcumuladoPorSlot && window._desgloseAcumuladoPorSlot[slot]) || []).forEach(d => {
       const yaExiste = desgloseAcumulado.some(ex => ex.staff === d.staff && ex.servicio === d.servicio);
       if (!yaExiste) desgloseAcumulado.push(d);
     });
@@ -466,7 +461,7 @@
           idEspera: idEsperaActual,
           chicaNombre: user?.name || '',
           clienteNombre: data.clientName,
-          clienteCodigo: clienteCodigoSlot,
+          clienteCodigo: window._as1Client || '',
           servicio: svcNamesFresh,
           total: totalFresh,
           promoNombre: data.promoNombre,
@@ -480,11 +475,11 @@
     // (antes el alert de éxito salía SIEMPRE y la clienta desaparecía de la pantalla sin haberse enviado)
     if (!_finResp || !_finResp.success) {
       const _msg = (_finResp && _finResp.message) ? _finResp.message : 'no se pudo conectar con el servidor';
-      console.warn('[finishAndSend]', clienteCodigoSlot || '(sin código)', data.clientName, idEsperaActual, 'NO enviada', _finResp);
+      console.warn('[finishAndSend]', window._as1Client || '(sin código)', data.clientName, idEsperaActual, 'NO enviada', _finResp);
       alert('⚠️ NO se pudo enviar la clienta a cobro.\n\nMotivo: ' + _msg + '.\n\nLa clienta sigue en tu pantalla — volvé a tocar "Finalizar servicio". Si sigue fallando, avisá a Mikaela.');
       return;
     }
-    console.info('[finishAndSend]', clienteCodigoSlot || '(sin código)', data.clientName, idEsperaActual, 'confirmada', _finResp);
+    console.info('[finishAndSend]', window._as1Client || '(sin código)', data.clientName, idEsperaActual, 'confirmada', _finResp);
 
     // ── LIMPIEZA: el backend confirmó el envío, ahora sí limpiar el slot ──
     if (activePromos[data.clientName]) delete activePromos[data.clientName];
@@ -499,7 +494,9 @@
       window._as1Client = '';
     }
     window._finishingData = null;
-    window._desgloseAcumulado = [];
+    // D7.1 Objetivo 4 — limpiar el store por-slot (fuente operativa real).
+    if (window._desgloseAcumuladoPorSlot) window._desgloseAcumuladoPorSlot[slot] = [];
+    window._desgloseAcumulado = []; // espejo de compatibilidad, no operativo
     slotServices[slot] = [];
     if (user && activeClients[user.name]) {
       activeClients[user.name] = (activeClients[user.name] || []).filter((_, i) => i !== slot - 1);
@@ -654,8 +651,7 @@
         const histRealizados = svcsRealizados.filter(function(s){ return !svcsExtras.includes(s); }).map(function(s){ return s.name + ' $' + s.price; }).join(' + ');
         const servicioHistorial = (histRealizados ? '[✅' + (user && user.name ? user.name : '') + ': ' + histRealizados + '] | ' : '') + servicioSiguiente;
 
-        const idEsperaActual =
-          (slot === 2 ? window._as2IdEspera : window._as1IdEspera) || '';
+        const idEsperaActual = window._as1IdEspera || '';
         const accionFin = idEsperaActual.startsWith('SN-') ? 'finalizarServicioNormal'
                         : idEsperaActual.startsWith('SP-') ? 'finalizarServicioPromo'
                         : 'finalizarAtencion';
@@ -664,8 +660,7 @@
           idEspera: idEsperaActual,
           chicaNombre: user && user.name ? user.name : '',
           clienteNombre: displayName,
-          clienteCodigo:
-            (slot === 2 ? window._as2Client : window._as1Client) || '',
+          clienteCodigo: window._as1Client || '',
           servicio: servicioHistorial || servicioSiguiente,
           servicioSiguiente: servicioSiguiente,
           total: String(totalSiguiente || 0),
@@ -772,8 +767,7 @@
         .map(s => ({ staff: user?.name || '', servicio: s.name, area: s.area || '', monto: Number(s.price || 0) }));
 
       const result = await apiPost('continuarPromoALista', {
-        idEspera:
-          (slot === 2 ? window._as2IdEspera : window._as1IdEspera) || '',
+        idEspera: window._as1IdEspera || '',
         chicaNombre: user?.name || '',
         clienteNombre: displayName,
         servicio: data.svcNames,
@@ -836,12 +830,10 @@
       const promasExtraRestantes = data.promasExtraPendientes.slice(1);
 
       const result = await apiPost('finalizarAtencion', {
-        idEspera:
-          (slot === 2 ? window._as2IdEspera : window._as1IdEspera) || '',
+        idEspera: window._as1IdEspera || '',
         chicaNombre: user?.name || '',
         clienteNombre: data.clientName,
-        clienteCodigo:
-          (slot === 2 ? window._as2Client : window._as1Client) || '',
+        clienteCodigo: window._as1Client || '',
         servicio: data.svcNames,
         total: data.total,
         promoNombre: data.promoNombre,
@@ -864,13 +856,11 @@
         // Quitar la promo que acabamos de activar de las pendientes
         window._takingPromasExtra = (window._takingPromasExtra || []).slice(1);
         try {
-          const _idEsperaAct =
-            (slot === 2 ? window._as2IdEspera : window._as1IdEspera) || '';
+          const _idEsperaAct = window._as1IdEspera || '';
           if (_idEsperaAct) sessionStorage.setItem('nexserv_promasExtra_' + _idEsperaAct, JSON.stringify(window._takingPromasExtra));
         } catch(eS2) {}
         try {
-          const _idEsperaAct =
-            (slot === 2 ? window._as2IdEspera : window._as1IdEspera) || '';
+          const _idEsperaAct = window._as1IdEspera || '';
           if (_idEsperaAct) sessionStorage.setItem('nexserv_promasExtra_' + _idEsperaAct, JSON.stringify(window._takingPromasExtra));
         } catch(eS2) {}
         const AREA_LABELS_ALERT = { cejas: '<svg class=\"nx-icon\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" width=\"16\" height=\"16\" fill=\"currentColor\"><path d=\"M11.4,12.2l-6.5,2.4c-.9.3-2-.1-2.3-1.1l-.5-1.9c-.1-.3,0-.7.4-.8l8.4-2.7c1.7-.4,3.6-.3,5.3.2s2.3.9,3.2,1.6,1.8,1.8,2.4,2.9.1.6-.1.8-.5.2-.8,0c-2.7-2-6.3-2.6-9.5-1.5Z\"/></svg>', depilacion: 'Depilacion', pestanas: 'Pestanas', facial: 'Facial', retiro_lifting: 'Lifting' };
@@ -909,12 +899,10 @@
     try {
       // Finalizar la atención con el total parcial y marcar como "Por cobrar"
       const result = await apiPost('finalizarAtencion', {
-        idEspera:
-          (slot === 2 ? window._as2IdEspera : window._as1IdEspera) || '',
+        idEspera: window._as1IdEspera || '',
         chicaNombre: user?.name || '',
         clienteNombre: data.clientName,
-        clienteCodigo:
-          (slot === 2 ? window._as2Client : window._as1Client) || '',
+        clienteCodigo: window._as1Client || '',
         servicio: nombresRealizados,
         total: String(totalRealizado),
         promoNombre: '',
@@ -983,7 +971,12 @@
     const badge = document.getElementById('capacityBadge');
     const slot1 = document.getElementById('slot1');
     const slot2 = document.getElementById('slot2');
-    
+    // Guard: el DOM de staffHome puede haber sido reemplazado (SIRA/Comisiones activos).
+    // Sin esto, escribir sobre badge/slot1/slot2 nulos revienta con TypeError — visto en
+    // consola como "Error cargando staff home" (vía loadStaffHome) y también alcanzable
+    // directo desde completarAreaMultiFinal(), que llama a updateCapacityUI() sin guard propio.
+    if (!badge || !slot1 || !slot2) return;
+
     badge.textContent = count + '/2 ocupada' + (count !== 1 ? 's' : '');
     badge.style.background = count === 2 ? 'var(--danger-bg)' : count === 1 ? 'var(--warning-bg)' : 'var(--success-bg)';
     badge.style.color = count === 2 ? 'var(--danger)' : count === 1 ? 'var(--warning)' : 'var(--success)';
@@ -1695,12 +1688,17 @@
     }));
 
     // Leer desglose previo del sheet si es ticket SP- (áreas anteriores ya registradas)
-    let desgloseDelSheet2 = window._desgloseAcumulado || [];
+    // D7.1 Objetivo 4B — fuente operativa EXCLUSIVA del slot 2. Antes esto
+    // leía window._desgloseAcumulado (global compartido), lo que permitía que
+    // el desglose del slot 1 contaminara el envío a cobro del slot 2 en doble
+    // atención. Mismo patrón ya aplicado en finishAndSend_ (Objetivo 4).
+    // El global queda solo como espejo legacy, nunca como fuente operativa acá.
+    let desgloseDelSheet2 = (window._desgloseAcumuladoPorSlot && window._desgloseAcumuladoPorSlot[2]) || [];
     const idEspera2 = window._as2IdEspera || '';
     const esTicketSP2 = idEspera2.startsWith('SP-');
     if (esTicketSP2 && desgloseDelSheet2.length === 0) {
       try {
-        const spData2 = await LineaService.obtenerPorCobrarSP(idEspera2);
+        const spData2 = await LineaService.obtenerPorCobrarSP(idEsperaActual || idEspera2 || '');
         if (spData2.success) {
           const allSP2 = [...(spData2.esperando||[]), ...(spData2.enServicio||[]), ...(spData2.porCobrar||[])];
           const miTicket2 = allSP2.find(t => t.idEspera === idEspera2);
@@ -1757,7 +1755,11 @@
     }
     console.info('[finishSlot2]', window._as2Client || '(sin código)', clientName, idEspera2, 'confirmada', _finResp2);
 
-    window._desgloseAcumulado = [];
+    // D7.1 Objetivo 4B — limpiar EXCLUSIVAMENTE el store del slot 2. El
+    // store del slot 1 (_desgloseAcumuladoPorSlot[1]) NUNCA se toca acá:
+    // el slot 1 puede tener una atención viva en curso.
+    if (window._desgloseAcumuladoPorSlot) window._desgloseAcumuladoPorSlot[2] = [];
+    window._desgloseAcumulado = []; // espejo de compatibilidad, no operativo
 
     if (promoData) delete activePromos[normalizeClientKey(clientName)];
 
@@ -1770,314 +1772,6 @@
   }
 
   // === RETIRO GRATIS / $10 ===
-
-  // ══════════════════════════════════════════════════════════════════════
-  // FASE 1 ACOTADA (DEV) — Parte A + Parte B. Helpers de render compartidos
-  // entre loadStaffHome() (carga completa) y refrescarAsignacionesStaff()
-  // (refresco liviano del timer/focus). No se toca ninguna regla de LINEAS,
-  // promociones, cobro ni comisiones — solo se extrae código YA EXISTENTE de
-  // loadStaffHome a funciones reutilizables, sin cambiar filtros ni HTML.
-  // ══════════════════════════════════════════════════════════════════════
-
-  // Render de "Por empezar" — EXACTAMENTE el mismo filtro y HTML que antes,
-  // ahora recibe la lista ya obtenida en vez de pedirla de nuevo.
-  // ── Bloque protección de fuente — referencia canónica del ticket madre ──
-  // getTableroLineas() devuelve objetos de _filaAObjeto() donde w.id es el
-  // lineaId (columna nativa de LINEAS), NUNCA el ticket_ref madre. Enviar
-  // w.id a tomarClienta/fuenteDelTicket rompería la resolución de fuente
-  // (LINEAS busca por ticket_ref en TicketsFuente, no por lineaId). Orden
-  // de precedencia: idEspera explícito → ticket_ref → ticketRef → base de
-  // promoRef (sin sufijo ':N') → '' (nunca w.id como fallback).
-  function _refTicketFrontend_(w) {
-    const directa = String(
-      (w && (w.idEspera || w.ticket_ref || w.ticketRef)) || ''
-    ).trim();
-    if (directa) return directa;
-    const promoRef = String((w && w.promoRef) || '').trim();
-    if (promoRef) return promoRef.split(':')[0];
-    return '';
-  }
-  window._refTicketFrontend_ = _refTicketFrontend_;
-
-  function _renderPorEmpezarDesdeListaEspera_(listaEspera, user) {
-    try {
-      const _peSection = document.getElementById('staffPorEmpezarSection');
-      const _peList    = document.getElementById('staffPorEmpezarList');
-      if (!_peSection || !_peList) return;
-      const _mias = (listaEspera || []).filter(function (w) {
-        const est = String(w.estado || w.status || '').toLowerCase().replace('_', ' ');
-        if (est !== 'esperando') return false;   // solo las que aún no empezaron
-        const quien = (w.tomadaPor && String(w.tomadaPor).trim())
-                   || (w.asignadaA && String(w.asignadaA).trim()) || '';
-        return quien && quien.split(',').map(function(s){return s.trim();}).indexOf(user.name) !== -1;
-      });
-      // CORRECCIÓN PRE-DEV 2 — la reconciliación de grupos (inicializar +
-      // purgar) ya NO vive exclusivamente dentro de `if (_mias.length > 0)`:
-      // corre siempre, incluida una respuesta vacía (_mias.length === 0),
-      // que es exactamente el caso "el backend ya no trae este ticket
-      // esperando" tras un timeout ambiguo. Nunca se crea un grupo con
-      // identificador vacío.
-      window._subticketSeleccion   = window._subticketSeleccion   || {};
-      window._subticketComponentes = window._subticketComponentes || {};
-
-      const _gruposVigentes = {};
-      _mias.forEach(function (w) {
-        const _gid = _refTicketFrontend_(w);
-        if (_gid) _gruposVigentes[_gid] = true;
-      });
-      Object.keys(window._subticketSeleccion).forEach(function (gid) {
-        if (!_gruposVigentes[gid]) delete window._subticketSeleccion[gid];
-      });
-      Object.keys(window._subticketComponentes).forEach(function (gid) {
-        if (!_gruposVigentes[gid]) delete window._subticketComponentes[gid];
-      });
-
-      if (_mias.length > 0) {
-        _peSection.style.display = 'block';
-        // CORRECCIÓN PRE-DEV — ya NO se reinicia incondicionalmente la
-        // selección en cada render (eso rompía una selección que la staff
-        // estuviera construyendo mientras corría el refresco automático).
-        // La inicialización y purga de grupos ya se hizo arriba, para
-        // cualquier _mias (incluida vacía). Acá solo queda: dentro de cada
-        // grupo vigente, conservar únicamente los ids que siguen existiendo
-        // en serviciosDetalle Y siguen siendo seleccionables — el resto se
-        // descarta. Nunca se mezcla selección entre grupoId distintos.
-        _peList.innerHTML = _mias.map(function (w) {
-          const _cod = String(w.codigo || '').replace(/'/g, "\\'");
-          const _nombreDisplay = String(w.nombre || w.cliente || '');
-          const _nom = _nombreDisplay.replace(/'/g, "\\'");
-          const _svc = String(w.servicio || w.promoNombre || 'Servicio');
-          const _tot = Number(w.total || 0);
-          const _idEspera = _refTicketFrontend_(w);
-
-          // ── Bloque protección de fuente — decide la VÍA operativa.
-          // Campo explícito w.fuente (resuelto en backend vía fuenteDelTicket,
-          // ver getTableroLineas/handleGetListaEspera). NUNCA se infiere acá
-          // por forma de datos, prefijo, es_promo ni presencia de lineaId.
-          const _fuente = String(w.fuente || '').trim().toUpperCase();
-
-          if (_fuente !== 'LINEAS' && _fuente !== 'LEGACY') {
-            // Fuente ausente/corrupta/no resuelta → bloquear, nunca adivinar
-            // (nunca cae a Vía A como fallback implícito).
-            delete window._subticketComponentes[_idEspera];
-            delete window._subticketSeleccion[_idEspera];
-            return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid #b45309;">'
-              + '<div style="font-weight:800;font-size:15px;">' + (_nombreDisplay || w.codigo || 'Clienta') + '</div>'
-              + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-              + '<div style="font-size:12px;font-weight:700;color:#b45309;">⚠ No se pudo confirmar el origen de este ticket (fuente="' + (_fuente || 'vacía') + '"). Avisá a soporte antes de tomarlo.</div>'
-              + '</div>';
-          }
-
-          if (_fuente === 'LINEAS' && !_idEspera) {
-            // Ticket confirmado LINEAS pero sin ticket_ref/ticketRef/promoRef
-            // resoluble en el objeto — nunca se usa w.id (lineaId) como
-            // sustituto: enviarlo a tomarClienta rompería fuenteDelTicket.
-            // Bloqueo explícito, cero apiPost.
-            console.warn('[porEmpezar] REFERENCIA_TICKET_AUSENTE — fuente=LINEAS sin referencia resoluble', w);
-            delete window._subticketComponentes[_idEspera];
-            delete window._subticketSeleccion[_idEspera];
-            return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid #b45309;">'
-              + '<div style="font-weight:800;font-size:15px;">' + (_nombreDisplay || w.codigo || 'Clienta') + '</div>'
-              + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-              + '<div style="font-size:12px;font-weight:700;color:#b45309;">⚠ Ticket nativo sin referencia identificable (REFERENCIA_TICKET_AUSENTE). Avisá a soporte antes de tomarlo.</div>'
-              + '</div>';
-          }
-
-          // A partir de acá, _fuente es 'LINEAS' o 'LEGACY' con certeza Y
-          // _idEspera es una referencia madre resoluble y no vacía.
-          // _tieneIdentidadEstableParaSelector_ / _debeAutoiniciarTodosComponentes_
-          // SOLO deciden qué interfaz mostrar (botón simple vs. selector de
-          // checkboxes) — nunca deciden qué backend se llama. Esa decisión ya
-          // quedó fija arriba, por _fuente.
-          const _detalle = Array.isArray(w.serviciosDetalle) ? w.serviciosDetalle : [];
-          const _tieneComponentesReales = _tieneIdentidadEstableParaSelector_(_detalle);
-
-          if (_fuente === 'LEGACY') {
-            // Vía A temporal — siempre botón simple, sin importar la forma de
-            // datos: Vía A (iniciarServicioStaff) no soporta selección nativa
-            // por componente, así que no tiene sentido mostrar un selector.
-            delete window._subticketComponentes[_idEspera];
-            delete window._subticketSeleccion[_idEspera];
-            return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
-              + '<div style="font-weight:800;font-size:15px;">' + (_nombreDisplay || w.codigo || 'Clienta') + '</div>'
-              + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-              + '<button onclick="iniciarClientaStaff(\'' + _cod + '\',\'' + _nom + '\')" '
-              + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
-              + '</div>';
-          }
-
-          // _fuente === 'LINEAS' — SIEMPRE Vía B, incluso en el caso "simple"
-          // (sin componentes con identidad estable). El motor backend
-          // (iniciarComponentesTicketNativoPorRef_) ya autoselecciona cuando
-          // hay una sola línea candidata — acá solo se decide la interfaz.
-          if (!_tieneComponentesReales) {
-            delete window._subticketComponentes[_idEspera];
-            delete window._subticketSeleccion[_idEspera];
-            return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
-              + '<div style="font-weight:800;font-size:15px;">' + (_nombreDisplay || w.codigo || 'Clienta') + '</div>'
-              + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-              + '<button onclick="iniciarTicketLineasSimple_(\'' + _idEspera + '\',\'' + _cod + '\',\'' + _nom + '\')" '
-              + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
-              + '</div>';
-          }
-
-          // ── BLOQUE 8C.2 — sin elección real: todos los componentes
-          // 'esperando' de este ticket ya son de esta staff. Se muestra el
-          // mismo botón simple de "Confirmar / Empezar" (con el total
-          // COMPLETO del ticket, _tot, tal como ya lo calcula el resto de
-          // esta función — nunca un total parcial de un solo componente),
-          // en vez del selector de checkboxes. Los mapas de selección se
-          // pre-llenan acá mismo, en el render (sin efecto — no llama al
-          // backend); al tocar el botón, se llama a la MISMA
-          // confirmarSeleccionSubtickets ya certificada, sin duplicar la
-          // ruta de envío.
-          if (_debeAutoiniciarTodosComponentes_(_detalle, user.name)) {
-            const _filasAuto = normalizarComponentesSeleccionables_(_detalle, user.name);
-            window._subticketComponentes[_idEspera] = {};
-            window._subticketSeleccion[_idEspera] = {};
-            _filasAuto.forEach(function (f) {
-              if (!f.seleccionable) return; // los bloqueados nunca se tocan
-              window._subticketComponentes[_idEspera][f.id] = f.componente;
-              window._subticketSeleccion[_idEspera][f.id] = true;
-            });
-            return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
-              + '<div style="font-weight:800;font-size:15px;">' + (_nombreDisplay || w.codigo || 'Clienta') + '</div>'
-              + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-              + '<button onclick="confirmarSeleccionSubtickets(\'' + _idEspera + '\',\'' + _cod + '\',\'' + _nom + '\')" '
-              + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
-              + '</div>';
-          }
-
-          // ── Selector real de subtickets (Parte B, vía helper compartido
-          // Fase 0) ─────────────────────────────────────────────────────
-          // Identidad por componente.id (nunca nombre/monto/posición). El
-          // helper guarda el objeto REAL completo (id/promoRef/ticketRef/
-          // estado/staff/servicio/area/monto — ver Parte A) solo para los
-          // componentes seleccionables, en window._subticketComponentes,
-          // para que la confirmación lea la identidad exacta.
-          const _filasNormalizadas = normalizarComponentesSeleccionables_(_detalle, user.name);
-
-          // CORRECCIÓN PRE-DEV — reconciliar la selección previa de ESTE
-          // grupo: descartar únicamente los ids que ya no son seleccionables
-          // (fueron tomados, anulados, o ya no están en serviciosDetalle).
-          // Los ids que siguen esperando y siguen presentes se conservan.
-          const _idsSeleccionablesVigentes = {};
-          _filasNormalizadas.forEach(function (f) { if (f.seleccionable) _idsSeleccionablesVigentes[f.id] = true; });
-          const _seleccionPrevia = window._subticketSeleccion[_idEspera] || {};
-          Object.keys(_seleccionPrevia).forEach(function (id) {
-            if (!_idsSeleccionablesVigentes[id]) delete _seleccionPrevia[id];
-          });
-          window._subticketSeleccion[_idEspera] = _seleccionPrevia;
-          // El mapa de componentes SÍ se reconstruye desde cero en cada
-          // render (renderSelectorSubtickets_ lo vuelve a llenar abajo con
-          // los objetos reales vigentes) — la selección (arriba) es lo único
-          // que se preserva entre renders.
-          window._subticketComponentes[_idEspera] = {};
-
-          const _filas = renderSelectorSubtickets_({
-            grupoId: _idEspera,
-            filas: _filasNormalizadas,
-            mapaDestino: window._subticketComponentes[_idEspera]
-          });
-
-          return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
-            + '<div style="font-weight:800;font-size:15px;">' + (_nombreDisplay || w.codigo || 'Clienta') + '</div>'
-            + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-            + '<div style="background:var(--bg);border-radius:12px;padding:2px 12px;margin-bottom:10px;">' + _filas + '</div>'
-            + '<div id="subSelMsg_' + _idEspera + '" style="font-size:12px;color:var(--ink-faint);font-weight:700;margin-bottom:8px;">Selecciona al menos un servicio</div>'
-            + '<button id="subSelBtn_' + _idEspera + '" disabled onclick="confirmarSeleccionSubtickets(\'' + _idEspera + '\',\'' + _cod + '\',\'' + _nom + '\')" '
-            + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:not-allowed;opacity:0.5;">▶ Iniciar seleccionados (0)</button>'
-            + '</div>';
-        }).join('');
-
-        // CORRECCIÓN PRE-DEV — el contador y botón de cada grupo deben
-        // reflejar la selección preservada (arriba solo se corrigió el
-        // checkbox visual). Reutiliza el helper existente, ya usado por
-        // toggleSubticketSeleccion — no se duplica la lógica de conteo.
-        _mias.forEach(function (w) {
-          const _idEspera = _refTicketFrontend_(w);
-          if (window._subticketSeleccion[_idEspera] && Object.keys(window._subticketSeleccion[_idEspera]).length > 0) {
-            _refrescarContadorSubtickets(_idEspera);
-          }
-        });
-      } else {
-        _peSection.style.display = 'none';
-        _peList.innerHTML = '';
-      }
-    } catch (ePE) { console.warn('[porEmpezar]', ePE); }
-  }
-
-  // Actualiza los contadores de espera (navBadge, navBadge2, pendingStat).
-  // Mismo cálculo que antes (incluye variables sin uso ya presentes en el
-  // original — no se tocan, para no alterar nada más que la fuente del dato).
-  function _actualizarContadoresEspera_(listaEspera, user) {
-    if (!listaEspera) return;
-    const allowed = AREA_FILTER[user.area] || [];
-    const areaMap2 = { 'cejas': 'cejas', 'depilación': 'depilacion', 'depilacion': 'depilacion', 'pestañas': 'pestanas', 'pestanas': 'pestanas', 'facial': 'facial', 'lifting / retiro': 'retiro_lifting', 'pestañas/cejas': 'retiro_lifting' };
-    // MODELO CENTRALIZADO: contar solo las asignadas a esta staff (igual que la lista)
-    const myCount = listaEspera.filter(w => {
-      const est = String(w.estado || w.status || '').toLowerCase();
-      if (est === 'en servicio' || est === 'completada') return false;
-      const quien = (w.asignadaA && String(w.asignadaA).trim()) || (w.tomadaPor && String(w.tomadaPor).trim()) || ''; return quien !== '' && quien === user.name;
-    }).length;
-    var _nb=document.getElementById('navBadge'); if(_nb) _nb.textContent = myCount;
-    var _nb2=document.getElementById('navBadge2'); if(_nb2) _nb2.textContent = myCount;
-    var _ps = document.getElementById('pendingStat'); if (_ps) { var _psv = _ps.querySelector('.value'); if (_psv) _psv.textContent = myCount; }
-  }
-
-  // CORRECCIÓN PRE-DEV — el refresco NUNCA debe pisar una operación de toma
-  // en curso: ni el "Tomar clienta" del modal (window._confirmTakeEnCurso),
-  // ni ningún envío de "Por empezar" en vuelo
-  // (window._subticketEnvioEnCurso[idEspera] === true para cualquier id).
-  // No basta con el dedupe de _staffAssignmentsRefreshPromise porque esa
-  // promesa es de OTRO refresco, no de la toma en sí.
-  function _hayOperacionTomaEnCurso_() {
-    if (window._confirmTakeEnCurso) return true;
-    const _m = window._subticketEnvioEnCurso;
-    if (_m) {
-      for (const _k in _m) {
-        if (Object.prototype.hasOwnProperty.call(_m, _k) && _m[_k] === true) return true;
-      }
-    }
-    return false;
-  }
-
-  // ── Parte B — refresco liviano de asignaciones ──────────────────────────
-  // Usado por el timer de staffHome (router.js) y por focus/visibilitychange
-  // (api.js) en vez de loadStaffHome() completo. Solo pide obtenerListaEspera
-  // una vez y actualiza "Por empezar" + contadores. NO recarga servicios del
-  // día, comisiones, fichas ni promociones.
-  async function refrescarAsignacionesStaff() {
-    if (window._staffAssignmentsRefreshPromise) return window._staffAssignmentsRefreshPromise;
-
-    const user = window.currentUser;
-    if (!user || user.role !== 'staff') return;
-    if (window._siraActivo || window._resumenBackup) return;
-    // Guard: verificar que el DOM de staffHome sigue siendo el vigente
-    if (!document.getElementById('staffPorEmpezarSection') && !document.getElementById('staffName')) return;
-    // CORRECCIÓN PRE-DEV — salir sin renderizar si hay una toma en curso.
-    if (_hayOperacionTomaEnCurso_()) return;
-
-    window._staffAssignmentsRefreshPromise = (async function () {
-      try {
-        const listaEspera = await LineaService.obtenerListaEspera().catch(function () { return []; });
-        // CORRECCIÓN PRE-DEV — revalidar justo antes de renderizar: pudo
-        // haber empezado una toma mientras esperábamos la respuesta del
-        // backend (obtenerListaEspera no es instantáneo).
-        if (_hayOperacionTomaEnCurso_()) return;
-        _renderPorEmpezarDesdeListaEspera_(listaEspera, user);
-        _actualizarContadoresEspera_(listaEspera, user);
-      } catch (e) {
-        console.warn('[refrescarAsignacionesStaff]', e);
-      }
-    })();
-
-    try {
-      await window._staffAssignmentsRefreshPromise;
-    } finally {
-      window._staffAssignmentsRefreshPromise = null;
-    }
-  }
 
   async function loadStaffHome() {
     // Guard: si SIRA o Comisiones están activos, el DOM de staffHome fue reemplazado
@@ -2101,20 +1795,41 @@
       // Guard tardío: verificar que el DOM sigue siendo el de staffHome (no fue reemplazado por SIRA)
       if (!section || !list) return;
 
-      // FASE 1 ACOTADA (DEV) Parte A — una sola consulta a
-      // LineaService.obtenerListaEspera(), reutilizada acá abajo para "Por
-      // empezar" (render) y más abajo para los contadores. Antes eran dos
-      // round-trips completos a Apps Script en la misma carga (PERF-A1).
-      // No es caché persistente: se pide de nuevo en cada loadStaffHome().
-      const listaEsperaResult = await LineaService.obtenerListaEspera().catch(function(){ return []; });
-
       // ── POR EMPEZAR (Espera por staff) ─────────────────────────────────────
       // Clientas asignadas a esta staff que todavía están 'esperando' en LINEAS.
       // La staff toca "Confirmar / Empezar" → iniciarServicioStaff → 'en_servicio'.
-      // El render vive en el helper compartido _renderPorEmpezarDesdeListaEspera_
-      // (definido antes de loadStaffHome), reutilizado también por
-      // refrescarAsignacionesStaff() — misma lógica, sin duplicar código.
-      _renderPorEmpezarDesdeListaEspera_(listaEsperaResult, user);
+      try {
+        const _peSection = document.getElementById('staffPorEmpezarSection');
+        const _peList    = document.getElementById('staffPorEmpezarList');
+        if (_peSection && _peList) {
+          const _wait = await LineaService.obtenerListaEspera().catch(function(){ return []; });
+          const _mias = (_wait || []).filter(function (w) {
+            const est = String(w.estado || w.status || '').toLowerCase().replace('_', ' ');
+            if (est !== 'esperando') return false;   // solo las que aún no empezaron
+            const quien = (w.tomadaPor && String(w.tomadaPor).trim())
+                       || (w.asignadaA && String(w.asignadaA).trim()) || '';
+            return quien && quien.split(',').map(function(s){return s.trim();}).indexOf(user.name) !== -1;
+          });
+          if (_mias.length > 0) {
+            _peSection.style.display = 'block';
+            _peList.innerHTML = _mias.map(function (w) {
+              const _cod = String(w.codigo || '').replace(/'/g, "\\'");
+              const _nom = String(w.nombre || '').replace(/'/g, "\\'");
+              const _svc = String(w.servicio || w.promoNombre || 'Servicio');
+              const _tot = Number(w.total || 0);
+              return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
+                + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
+                + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
+                + '<button onclick="iniciarClientaStaff(\'' + _cod + '\',\'' + _nom + '\')" '
+                + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
+                + '</div>';
+            }).join('');
+          } else {
+            _peSection.style.display = 'none';
+            _peList.innerHTML = '';
+          }
+        }
+      } catch (ePE) { console.warn('[porEmpezar]', ePE); }
       
       if (result.success && result.atenciones && result.atenciones.length > 0) {
         section.style.display = 'block';
@@ -2165,10 +1880,25 @@
         const codigoAnterior = window._as1Client;
         const mismaClienta = codigoAnterior === a1.codigo;
         const tieneServicios = slotServices[1] && slotServices[1].length > 0;
+        // D7.1 Objetivo 2 — si el slot ya fue reconstruido con la regla
+        // canónica (típicamente por doLogin, vía _serviciosDetalleActivosParaStaff_)
+        // para esta MISMA clienta y ya tiene servicios, loadStaffHome NO
+        // vuelve a tocar slotServices[1] con una lógica distinta — eso era
+        // exactamente la doble reconstrucción divergente (hallazgo D7,
+        // Hallazgo 2). Solo se refresca metadata visual/fuente canónica; la
+        // reconstrucción de servicios/promo solo corre cuando el slot
+        // realmente lo necesita (vacío o cambio de clienta).
+        const _yaReconstruido1 = mismaClienta && tieneServicios;
 
         // CRÍTICO: actualizar _as1IdEspera con el ID real del ticket activo (puede ser SP- o LE-)
         window._as1IdEspera = a1.idEspera || window._as1IdEspera || '';
-        
+        // D7.1 Objetivo 1 — loadStaffHome también re-obtiene la atención
+        // fresca del backend (misma llamada a getAtenciones que doLogin), así
+        // que también le corresponde mantener la fuente canónica al día,
+        // desde el mismo dato (a1.fuenteReal) y la misma normalización.
+        window._as1FuenteCanonica = normalizarFuenteAtencion_(a1.fuenteReal);
+        window._as1FuenteLineas = (window._as1FuenteCanonica === 'LINEAS'); // espejo de compatibilidad
+
         window._as1Client     = a1.codigo;
         window._as1ClientName = a1.nombre || '';
         var _av1=document.getElementById('as1Avatar'); if(_av1) _av1.textContent = a1.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
@@ -2179,32 +1909,47 @@
         _setNotaRecepcion(1, a1.observaciones);
         renderSecuenciaBanner(1, a1.secuencia || []);
 
-        // Solo resetear slotServices si cambio la clienta o si esta completamente vacia
-        if (!mismaClienta || !tieneServicios) {
+        // Solo resetear/reconstruir slotServices si cambio la clienta o si esta completamente vacia
+        if (!_yaReconstruido1) {
           slotServices[1] = [];
         }
-        
-        if (a1.servicio && a1.servicio !== '—') {
-          const clientKey1 = normalizeClientKey(a1.nombre);
 
-          if (a1.promoNombre && String(a1.promoNombre).trim() !== '') {
-            // Con promo: calcular el precio correspondiente al area del staff
+        if (!_yaReconstruido1 && a1.servicio && a1.servicio !== '—') {
+          const clientKey1 = normalizeClientKey(a1.nombre);
+          // D7.1 Objetivo 2 — MISMA regla canónica que doLogin, una sola vez:
+          // el desglose moderno (estado==='en_servicio' && staff===currentUser.name
+          // por componente, vía _serviciosDetalleActivosParaStaff_) se evalúa
+          // ANTES que promoNombre y, si aplica, domina el slot por completo.
+          // Antes, esta función tenía su propia lógica separada (PROMOS.find +
+          // unshift/push SIN filtrar staff/estado) — esa reinyección sin
+          // filtro era la vía de contaminación entre staff distintas dentro
+          // del mismo ticket (hallazgo D7-B/D7-C). Ya no se duplica esa lógica.
+          const _detalleLSH1 = Array.isArray(a1.serviciosDetalle) ? a1.serviciosDetalle : [];
+          const _rLSH1 = _detalleLSH1.length > 0 ? _serviciosDetalleActivosParaStaff_(_detalleLSH1, user.name) : null;
+
+          if (_rLSH1 && _rLSH1.esModerno) {
+            slotServices[1] = _rLSH1.lista.map(function (sd) {
+              return {
+                name: sd.servicio || sd.nombre || sd.name || '',
+                price: Number(sd.monto || sd.precio || sd.price || 0),
+                area: sd.area || a1.area || '',
+                esPromo: !!sd.esPromo, status: 'aprobado', _yaEnLinea: true,
+                lineaId: String(sd.lineaId || '')
+              };
+            });
+            if (_rLSH1.lista.length === 0) {
+              console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (loadStaffHome slot1)', a1.idEspera);
+            }
+            if (activePromos[clientKey1]) { delete activePromos[clientKey1]; saveActivePromos(); }
+          } else if (a1.promoNombre && String(a1.promoNombre).trim() !== '') {
+            // Con promo (legacy, sin desglose moderno): comportamiento previo
+            // conservado tal cual, sin cambios de comportamiento.
             const promoFull = PROMOS.find(p => p.name === a1.promoNombre);
             if (promoFull) {
               const myArea = user.area || 'cejas';
               const myPrice = getMyPromoPrice(promoFull, myArea);
-
-              // Solo agregar si no existe ya
               if (!slotServices[1].find(s => s.name === a1.promoNombre || s.name === a1.servicio)) {
-                slotServices[1].unshift({
-                  name: a1.promoNombre,
-                  price: myPrice,
-                  area: myArea,
-                  // Bloque 8C.1 — faltaba acá: si la clienta ya tiene una promo
-                  // en curso y la staff reabre "Aplicar promo" para cambiarla,
-                  // esta es la entrada que slotServices[1][0] expone.
-                  lineaId: String(a1.lineaId || '')
-                });
+                slotServices[1].unshift({ name: a1.promoNombre, price: myPrice, area: myArea });
               }
               activePromos[clientKey1] = {
                 promo: promoFull,
@@ -2224,47 +1969,26 @@
                 window._takingPromasExtra = a1.promasExtra;
                 try { sessionStorage.setItem('nexserv_promasExtra_' + (a1.idEspera||''), JSON.stringify(a1.promasExtra)); } catch(eS) {}
               }
-              // Actualizar botones de finalización con opciones de promo
-              setTimeout(() => updateFinishButtons(1), 300);
             }
+          } else if (_rLSH1) {
+            // Legacy con detalles, sin promoNombre: usar detalles YA
+            // filtrados por la regla canónica (antes se pusheaban sin
+            // filtrar staff/estado).
+            slotServices[1] = _rLSH1.lista.map(function (sd) {
+              return {
+                name: sd.servicio || sd.nombre || sd.name || '',
+                price: Number(sd.monto || sd.precio || sd.price || 0),
+                area: sd.area || a1.area || '',
+                esPromo: !!sd.esPromo, status: 'aprobado', _yaEnLinea: true,
+                lineaId: String(sd.lineaId || '')
+              };
+            });
+            if (activePromos[clientKey1]) { delete activePromos[clientKey1]; saveActivePromos(); }
           } else {
-            // Sin promo: restaurar TODOS los servicios del ticket (no solo el primario).
-            // FIX (13/07): cuando la staff agrega extras (combo + nariz + barbilla), el
-            // ticket llega con varios servicios en serviciosDetalle. Antes esta rama solo
-            // re-agregaba a1.servicio (el nombre combinado en un renglón) → los extras no
-            // se listaban por separado y, tras un refresh, "desaparecían". Ahora se
-            // expande serviciosDetalle en renglones separados, sin duplicar lo ya presente.
-            const _detalle1 = Array.isArray(a1.serviciosDetalle) ? a1.serviciosDetalle : [];
-            if (_detalle1.length > 1) {
-              _detalle1.forEach(function (sd) {
-                const _nm = sd.servicio || sd.nombre || sd.name || '';
-                if (!_nm) return;
-                if (slotServices[1].find(s => s.name === _nm)) return;
-                slotServices[1].push({
-                  name: _nm,
-                  price: Number(sd.monto || sd.precio || sd.price || 0),
-                  area: sd.area || a1.area || '',
-                  esPromo: !!sd.esPromo,
-                  status: 'aprobado',
-                  // ya vienen de líneas existentes en LINEAS → no re-sincronizar al ticket
-                  _yaEnLinea: true,
-                  // Bloque 8C — identificador exacto de la línea LINEAS de este
-                  // componente (Bloque 8B), para que "Aplicar promo" pueda
-                  // llamar a sustituirServicioPorPromoStaffNativa sin adivinar.
-                  lineaId: String(sd.lineaId || '')
-                });
-              });
-            } else {
-              const price = a1.total || 0;
-              if (!slotServices[1].find(s => s.name === a1.servicio)) {
-                slotServices[1].unshift({
-                  name: a1.servicio,
-                  price: price,
-                  area: a1.area,
-                  // Bloque 8C — ver nota equivalente en la rama multi-servicio.
-                  lineaId: String(a1.lineaId || '')
-                });
-              }
+            // Sin detalle en absoluto: agregado simple del servicio (comportamiento previo).
+            const price = a1.total || 0;
+            if (!slotServices[1].find(s => s.name === a1.servicio)) {
+              slotServices[1].unshift({ name: a1.servicio, price: price, area: a1.area });
             }
             // Limpiar promo residual de esta clienta (puede ser un servicio nuevo sin promo)
             if (activePromos[clientKey1]) {
@@ -2277,22 +2001,27 @@
         // promoNombre no existe en el catálogo PROMOS del front (p.ej. clienta piloto
         // LINEAS)— cargar el servicio directo desde la atención (serviciosDetalle o
         // servicio/total) para que el panel activo no aparezca vacío tras un refresh.
-        if ((!slotServices[1] || slotServices[1].length === 0) && a1.servicio && a1.servicio !== '—') {
+        // D7.1 Objetivo 2 — también gated por !_yaReconstruido1: si el slot
+        // ya estaba correctamente poblado, este fallback no debe pisarlo.
+        if (!_yaReconstruido1 && (!slotServices[1] || slotServices[1].length === 0) && a1.servicio && a1.servicio !== '—') {
           const _det1p = Array.isArray(a1.serviciosDetalle) ? a1.serviciosDetalle : [];
           if (_det1p.length > 0) {
             slotServices[1] = _det1p.map(function(sd){ return {
               name: sd.servicio || sd.nombre || sd.name || '',
               price: Number(sd.monto || sd.precio || sd.price || 0),
-              area: sd.area || a1.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true,
-              lineaId: String(sd.lineaId || '')
+              area: sd.area || a1.area || '', esPromo: !!sd.esPromo, _yaEnLinea: true
             }; });
           } else {
             var _nm1p = String(a1.servicio || '');
             if (_nm1p.trim().indexOf('{') === 0) { try { _nm1p = JSON.parse(_nm1p).nombre || _nm1p; } catch(e){} }
-            slotServices[1] = [{ name: _nm1p, price: Number(a1.total || 0), area: a1.area || '', _yaEnLinea: true, lineaId: String(a1.lineaId || '') }];
+            slotServices[1] = [{ name: _nm1p, price: Number(a1.total || 0), area: a1.area || '', _yaEnLinea: true }];
           }
         }
         renderServicesForSlot(1);
+        // D7.1 Objetivo 1 — refrescar botón de finalización con la fuente
+        // canónica ya actualizada arriba (antes esto solo se hacía dentro
+        // de la rama de promo legacy).
+        setTimeout(() => { try { updateFinishButtons(1); } catch (eUFB1LSH) { console.warn('[loadStaffHome] updateFinishButtons(1):', eUFB1LSH); } }, 300);
 
         // Actualizar total: solo servicios no pendientes y no rechazados
         const total1 = slotServices[1].reduce((sum, s) => {
@@ -2318,10 +2047,21 @@
         if (section) section.style.display = 'none';
       }
       
-      // Actualizar contadores — FASE 1 ACOTADA (DEV) Parte A: reutiliza
-      // listaEsperaResult (ya obtenida arriba) en vez de una segunda consulta
-      // a obtenerListaEspera. Mismo cálculo, en el helper compartido.
-      _actualizarContadoresEspera_(listaEsperaResult, user);
+      // Actualizar contadores
+      const waitResult = await LineaService.obtenerListaEspera().then(function(l){ return {success:true, lista:l}; }).catch(function(){ return apiGet('getListaEspera'); });
+      if (waitResult.success) {
+        const allowed = AREA_FILTER[user.area] || [];
+        const areaMap2 = { 'cejas': 'cejas', 'depilación': 'depilacion', 'depilacion': 'depilacion', 'pestañas': 'pestanas', 'pestanas': 'pestanas', 'facial': 'facial', 'lifting / retiro': 'retiro_lifting', 'pestañas/cejas': 'retiro_lifting' };
+        // MODELO CENTRALIZADO: contar solo las asignadas a esta staff (igual que la lista)
+        const myCount = waitResult.lista.filter(w => {
+          const est = String(w.estado || w.status || '').toLowerCase();
+          if (est === 'en servicio' || est === 'completada') return false;
+          const quien = (w.asignadaA && String(w.asignadaA).trim()) || (w.tomadaPor && String(w.tomadaPor).trim()) || ''; return quien !== '' && quien === user.name;
+        }).length;
+        var _nb=document.getElementById('navBadge'); if(_nb) _nb.textContent = myCount;
+        var _nb2=document.getElementById('navBadge2'); if(_nb2) _nb2.textContent = myCount;
+        var _ps = document.getElementById('pendingStat'); if (_ps) { var _psv = _ps.querySelector('.value'); if (_psv) _psv.textContent = myCount; }
+      }
 
       // Cargar servicios completados hoy
       const _svHoy = await LineaService.obtenerServiciosHoy(user.name);
@@ -2385,417 +2125,6 @@
       console.error('Error cargando staff home:', err);
     }
   }
-
-  // ══════════════════════════════════════════════════════════════════════
-  // Bloque 2N-2B.1 Fase 0 corrección — HELPER COMPARTIDO MÍNIMO
-  // Una sola implementación de las reglas de selección de subtickets, usada
-  // por AMBAS superficies: loadStaffHome/"Por empezar" (este archivo) y
-  // openTake/modal "Tomar clienta" (nexserv-main-1.js). No se duplican estas
-  // reglas en ningún otro archivo — main-1.js llama a estas funciones.
-  // ══════════════════════════════════════════════════════════════════════
-
-  // Clasifica cada componente crudo (serviciosDetalle) en seleccionable o
-  // bloqueado, según la ÚNICA regla válida: estado==='esperando' &&
-  // staff===staffActual && id real no vacío. No usa nombre/monto/posición
-  // como identidad — solo para mostrar la etiqueta.
-  function normalizarComponentesSeleccionables_(componentes, staffActual) {
-    const lista = Array.isArray(componentes) ? componentes : [];
-    const staffN = String(staffActual || '').trim();
-    return lista.map(function (c) {
-      const cid = (c && c.id !== undefined && c.id !== null) ? String(c.id).trim() : '';
-      const cStaff = String((c && c.staff) || '').trim();
-      const cEstado = String((c && c.estado) || '').toLowerCase().trim();
-      const esMia = cStaff === staffN;
-      const seleccionable = cEstado === 'esperando' && esMia && cid !== '';
-      const motivoBloqueo = seleccionable ? '' : (!esMia
-        ? ('Asignado a ' + (cStaff || 'otra staff'))
-        : ({ en_servicio: 'EN CURSO', por_verificar: 'COMPLETADO', completado: 'LISTO PARA COBRO',
-             anulado: 'ANULADO', cobrado: 'COBRADO' }[cEstado] || (cEstado ? cEstado.toUpperCase() : 'BLOQUEADO')));
-      return { componente: c, id: cid, seleccionable: seleccionable, motivoBloqueo: motivoBloqueo };
-    });
-  }
-  window.normalizarComponentesSeleccionables_ = normalizarComponentesSeleccionables_;
-
-  // Regla única (Corrección B.1) para decidir si un ticket CALIFICA para el
-  // selector nuevo: 2+ componentes Y TODOS con id real. Si falta identidad
-  // en cualquiera, se conserva el comportamiento legacy — nunca un selector
-  // híbrido.
-  function _tieneIdentidadEstableParaSelector_(componentes) {
-    const lista = Array.isArray(componentes) ? componentes : [];
-    if (lista.length <= 1) return false;
-    const ids = lista.map(function (c) {
-      return (c && c.id !== undefined && c.id !== null) ? String(c.id).trim() : '';
-    });
-    const todosConId = ids.every(function (id) { return id !== ''; });
-    if (!todosConId) return false;
-    // Bloque 2N-2C.2 (VIS-SN07) — ids no vacíos no bastan: deben ser
-    // distintos. Ids duplicados son datos inconsistentes: se conserva el
-    // comportamiento legacy (sin selector) y se advierte en consola.
-    const idsDistintos = new Set(ids).size === ids.length;
-    if (!idsDistintos) {
-      console.warn('[_tieneIdentidadEstableParaSelector_] componentes con id duplicado — datos inconsistentes, se conserva flujo legacy', componentes);
-      return false;
-    }
-    return true;
-  }
-  window._tieneIdentidadEstableParaSelector_ = _tieneIdentidadEstableParaSelector_;
-
-  // ══════════════════════════════════════════════════════════════════════
-  // BLOQUE 8C.2 — helper único: ¿corresponde autoiniciar TODOS los
-  // componentes esperando de esta staff, sin mostrar el selector?
-  // ══════════════════════════════════════════════════════════════════════
-  // El selector de subtickets solo tiene sentido cuando existe una ELECCIÓN
-  // real (varias staffs involucradas, o componentes bloqueados mezclados
-  // con seleccionables de otra identidad). Cuando TODOS los componentes en
-  // estado 'esperando' ya pertenecen a la staff actual — sin excepción —
-  // no hay nada que elegir: mostrarle un selector con checkboxes ya
-  // marcados es una confirmación redundante que además, si el cálculo de
-  // "mi total" toma solo la PRIMERA fila en vez de sumar todas, muestra un
-  // total parcial incorrecto (el defecto reportado en DEV).
-  //
-  // Reutiliza la MISMA identidad que normalizarComponentesSeleccionables_ /
-  // _tieneIdentidadEstableParaSelector_: componente.id / lineaId real, NUNCA
-  // nombre, monto o posición. Usada por AMBAS superficies (openTake en
-  // nexserv-main-1.js, "Por empezar" en este archivo) — no se duplica.
-  //
-  // Devuelve true SOLO cuando:
-  //   - hay al menos un componente;
-  //   - TODOS (seleccionables o no) tienen id real y distinto entre sí
-  //     (misma exigencia de identidad completa que el selector real);
-  //   - TODOS los componentes en estado 'esperando' pertenecen a staffActual
-  //     (si hay uno solo de otra staff, false — selector real necesario);
-  //   - hay al menos un componente 'esperando' de staffActual (si no hay
-  //     ninguno pendiente, no hay nada que autoiniciar).
-  // Los componentes bloqueados (en_servicio/completado/anulado/cobrado) de
-  // CUALQUIER staff no impiden el autoinicio — simplemente se ignoran, tal
-  // como pide el Caso C: no se reinician, no se tocan, solo no participan
-  // de la decisión.
-  function _debeAutoiniciarTodosComponentes_(componentes, staffActual) {
-    const lista = Array.isArray(componentes) ? componentes : [];
-    if (lista.length === 0) return false;
-    const staffN = String(staffActual || '').trim();
-    if (!staffN) return false;
-
-    const ids = [];
-    let hayEsperandoPropio = false;
-
-    for (let i = 0; i < lista.length; i++) {
-      const c = lista[i];
-      const cid = (c && c.id !== undefined && c.id !== null) ? String(c.id).trim() : '';
-      if (!cid) return false; // identidad incompleta en cualquier componente → legacy/selector real
-      ids.push(cid);
-      const cStaff = String((c && c.staff) || '').trim();
-      const cEstado = String((c && c.estado) || '').toLowerCase().trim();
-      if (cEstado === 'esperando') {
-        if (cStaff !== staffN) return false; // hay un esperando ajeno → selección real necesaria
-        hayEsperandoPropio = true;
-      }
-      // Cualquier otro estado (en_servicio/completado/anulado/cobrado/
-      // por_verificar) se ignora a propósito: no participa de la decisión,
-      // no se reinicia, no se toca.
-    }
-    if (new Set(ids).size !== ids.length) return false; // ids duplicados → datos inconsistentes, legacy
-
-    return hayEsperandoPropio;
-  }
-  window._debeAutoiniciarTodosComponentes_ = _debeAutoiniciarTodosComponentes_;
-
-  // Renderiza el HTML de las filas (checkbox real o bloqueada/informativa)
-  // para un grupo de componentes ya normalizados. 'opciones':
-  //   grupoId      — identificador único del ticket (idEspera/ticketRef)
-  //   filas        — salida de normalizarComponentesSeleccionables_
-  //   mapaDestino  — objeto (por referencia) donde se guarda, SOLO para los
-  //                  componentes seleccionables, el objeto real completo
-  //                  keyed por id — para leer la selección después sin
-  //                  tocar el DOM ni reconstruir nada.
-  // El checkbox llama a toggleSubticketSeleccion(grupoId, id, checked) —
-  // la MISMA función ya usada por "Por empezar", sin duplicarla.
-  function renderSelectorSubtickets_(opciones) {
-    const grupoId = (opciones && opciones.grupoId) || '';
-    const filas = (opciones && opciones.filas) || [];
-    const mapaDestino = (opciones && opciones.mapaDestino) || {};
-    // CORRECCIÓN PRE-DEV — reconstruir el estado visual (checked) desde la
-    // selección YA PRESERVADA en window._subticketSeleccion, en vez de
-    // renderizar siempre desmarcado. Esta función solo LEE la selección
-    // existente; quien decide qué se preserva/descarta es
-    // _renderPorEmpezarDesdeListaEspera_ (reconciliación por grupoId/id).
-    const _seleccionVigente = (window._subticketSeleccion && window._subticketSeleccion[grupoId]) || {};
-    return filas.map(function (f) {
-      const label = String((f.componente && (f.componente.servicio || f.componente.area)) || 'Servicio');
-      const monto = Number((f.componente && f.componente.monto) || 0);
-      if (f.seleccionable) {
-        mapaDestino[f.id] = f.componente;
-        const idAttr = f.id.replace(/'/g, "\\'");
-        const grupoAttr = String(grupoId).replace(/'/g, "\\'");
-        const _marcado = !!_seleccionVigente[f.id];
-        return '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);cursor:pointer;">'
-          + '<input type="checkbox" ' + (_marcado ? 'checked ' : '') + 'onchange="toggleSubticketSeleccion(\'' + grupoAttr + '\',\'' + idAttr + '\', this.checked)" style="width:18px;height:18px;flex:none;">'
-          + '<span style="font-size:13px;flex:1;">' + label + (monto ? (' · $' + monto) : '') + '</span>'
-          + '</label>';
-      }
-      return '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);opacity:0.55;">'
-        + '<span style="width:18px;flex:none;text-align:center;">🔒</span>'
-        + '<span style="font-size:13px;flex:1;">' + label + (monto ? (' · $' + monto) : '') + '</span>'
-        + '<span style="font-size:10px;font-weight:800;color:var(--ink-faint);white-space:nowrap;">' + f.motivoBloqueo + '</span>'
-        + '</div>';
-    }).join('');
-  }
-  window.renderSelectorSubtickets_ = renderSelectorSubtickets_;
-
-  // Lee la selección real para un grupo desde el mapa real — NUNCA desde el
-  // DOM ni reconstruyendo por nombre/índice.
-  function obtenerSeleccionSubtickets_(grupoId, mapaComponentes) {
-    const sel = (window._subticketSeleccion && window._subticketSeleccion[grupoId]) || {};
-    const ids = Object.keys(sel);
-    const mapa = mapaComponentes || {};
-    return ids.map(function (id) { return mapa[id]; }).filter(Boolean);
-  }
-  window.obtenerSeleccionSubtickets_ = obtenerSeleccionSubtickets_;
-
-  // Valida una selección ya construida: no vacía, todos los componentes con
-  // id real no vacío. Devuelve { ok, motivo }.
-  function validarSeleccionSubtickets_(componentesSeleccionados) {
-    if (!Array.isArray(componentesSeleccionados) || componentesSeleccionados.length === 0) {
-      return { ok: false, motivo: 'seleccion_vacia' };
-    }
-    for (let i = 0; i < componentesSeleccionados.length; i++) {
-      const c = componentesSeleccionados[i];
-      if (!c || c.id === undefined || c.id === null || String(c.id).trim() === '') {
-        return { ok: false, motivo: 'componente_sin_id' };
-      }
-    }
-    return { ok: true };
-  }
-  window.validarSeleccionSubtickets_ = validarSeleccionSubtickets_;
-
-  // ── Bloque 2N-2B.1 Parte B — selección local de subtickets ──────────────
-  // Identidad SIEMPRE por componente.id (nunca nombre/monto/posición/índice/
-  // nombre de clienta). window._subticketSeleccion[grupoId] = { [id]: true }.
-  // window._subticketComponentes[grupoId] = { [id]: <objeto real completo> }
-  // (llenado por renderSelectorSubtickets_, solo con componentes seleccionables).
-  // grupoId es genérico: puede ser el idEspera de "Por empezar" o el
-  // ticket_ref usado por openTake — la función no distingue superficie.
-  // IMPORTANTE — Parte B creó la selección local.
-  // Parte C conecta confirmarSeleccionSubtickets con el backend real.
-  // Fase 0 corrección — Parte 4 conecta también confirmTake_ (main-1.js)
-  // usando estas MISMAS funciones. La identidad continúa siendo
-  // componente.id y la vía legacy permanece intacta en ambas superficies.
-  function toggleSubticketSeleccion(idEspera, componenteId, checked) {
-    window._subticketSeleccion = window._subticketSeleccion || {};
-    window._subticketSeleccion[idEspera] = window._subticketSeleccion[idEspera] || {};
-    if (checked) {
-      window._subticketSeleccion[idEspera][componenteId] = true;
-    } else {
-      delete window._subticketSeleccion[idEspera][componenteId];
-    }
-    _refrescarContadorSubtickets(idEspera);
-  }
-  window.toggleSubticketSeleccion = toggleSubticketSeleccion;
-
-  function _refrescarContadorSubtickets(idEspera) {
-    const _sel = (window._subticketSeleccion && window._subticketSeleccion[idEspera]) || {};
-    const _n = Object.keys(_sel).length;
-    const _elMsg = document.getElementById('subSelMsg_' + idEspera);
-    const _elBtn = document.getElementById('subSelBtn_' + idEspera);
-    if (_elMsg) {
-      _elMsg.textContent = _n > 0 ? (_n + ' servicio' + (_n > 1 ? 's' : '') + ' seleccionado' + (_n > 1 ? 's' : '')) : 'Selecciona al menos un servicio';
-    }
-    if (_elBtn) {
-      _elBtn.disabled = _n === 0;
-      _elBtn.textContent = '▶ Iniciar seleccionados (' + _n + ')';
-      _elBtn.style.opacity = _n === 0 ? '0.5' : '1';
-      _elBtn.style.cursor = _n === 0 ? 'not-allowed' : 'pointer';
-    }
-  }
-  window._refrescarContadorSubtickets = _refrescarContadorSubtickets;
-
-  // ── Bloque protección de fuente — Vía B para el caso LINEAS "simple" ────
-  // Cubre exactamente el caso que antes caía en Vía A (iniciarClientaStaff)
-  // solo porque el ticket no tenía componentes con identidad estable para
-  // mostrar un selector. Ahora la decisión de vía es por w.fuente, no por
-  // forma de datos — así que un ticket LINEAS de 1 sola línea también debe
-  // pasar por tomarClienta/iniciarComponentesTicketNativoPorRef_. Se manda
-  // SIN componentesSeleccionados: el motor certificado ya autoselecciona
-  // cuando hay una única línea candidata (esperando, de esta staff, de este
-  // ticket) — y si por algún motivo hubiera 2+ sin selección explícita,
-  // el motor devuelve COMPONENT_SELECTION_REQUIRED en vez de adivinar, y
-  // acá se lo mostramos a la staff en vez de fallar en silencio.
-  async function iniciarTicketLineasSimple_(idEspera, codigo, nombre) {
-    window._subticketEnvioEnCurso = window._subticketEnvioEnCurso || {};
-    if (window._subticketEnvioEnCurso[idEspera]) return; // doble toque ignorado
-
-    if (!idEspera) { if (typeof showToast === 'function') showToast('⚠ Error: ticket sin referencia'); return; }
-    const user = window.currentUser;
-    if (!user || !String(user.name || '').trim()) {
-      if (typeof showToast === 'function') showToast('⚠ Error: sesión de staff no disponible');
-      return;
-    }
-
-    window._subticketEnvioEnCurso[idEspera] = true;
-    try {
-      const r = await apiPost('tomarClienta', {
-        idEspera: idEspera,
-        chicaNombre: user.name
-        // sin componentesSeleccionados a propósito — ver comentario arriba.
-      }, { retries: 0, timeoutMs: 15000 });
-
-      if (!r || r.success !== true) {
-        const _err = r && r.error;
-        if (_err === 'COMPONENT_SELECTION_REQUIRED') {
-          if (typeof showToast === 'function') showToast('⚠ Este ticket tiene varios servicios — recargá para ver el selector');
-          if (typeof refrescarAsignacionesStaff === 'function') refrescarAsignacionesStaff();
-          return;
-        }
-        const _msg = (r && (r.message || r.error)) || 'No se pudo iniciar';
-        if (typeof showToast === 'function') showToast('⚠ Error al iniciar: ' + _msg);
-        return;
-      }
-
-      if (typeof showToast === 'function') showToast('▶ Servicio iniciado con ' + (nombre || 'la clienta'));
-      if (typeof loadStaffHome === 'function') loadStaffHome();
-    } catch (e) {
-      console.error('[iniciarTicketLineasSimple_]', e);
-      if (typeof showToast === 'function') showToast('⚠ Error al iniciar el servicio');
-    } finally {
-      delete window._subticketEnvioEnCurso[idEspera];
-    }
-  }
-  window.iniciarTicketLineasSimple_ = iniciarTicketLineasSimple_;
-
-  // ── Bloque 2N-2B.1 Parte C — conexión real del selector al backend ──────
-  // confirmarSeleccionSubtickets ahora SÍ llama al backend real vía
-  // apiPost('tomarClienta'). El payload se construye EXCLUSIVAMENTE desde
-  // window._subticketComponentes[idEspera] (objetos reales de Parte A/B) —
-
-  // nunca se reconstruye desde el DOM, nunca se envían nombres/índices/
-  // montos como identidad. iniciarClientaStaff/legacy NO se toca — sigue
-  // usando apiPost('iniciarServicioStaff', ...) sin cambios.
-  async function confirmarSeleccionSubtickets(idEspera, codigo, nombre) {
-    const _elMsg = document.getElementById('subSelMsg_' + idEspera);
-    const _elBtn = document.getElementById('subSelBtn_' + idEspera);
-
-    // Guard anti-doble-submit por ticket (frontend). El hardening de
-    // concurrencia en backend (LockService) queda para Parte C.1 — fuera
-    // de alcance acá.
-    window._subticketEnvioEnCurso = window._subticketEnvioEnCurso || {};
-    if (window._subticketEnvioEnCurso[idEspera]) return; // segundo toque ignorado
-
-    // ── Validaciones frontend obligatorias, ANTES de cualquier apiPost ──
-    if (!idEspera) {
-      if (_elMsg) _elMsg.textContent = 'Error: idEspera vacío — no se envió nada';
-      return;
-    }
-    const user = window.currentUser;
-    if (!user || !String(user.name || '').trim()) {
-      if (_elMsg) _elMsg.textContent = 'Error: sesión de staff no disponible — no se envió nada';
-      return;
-    }
-    // Lectura y validación vía helper compartido (misma regla que openTake) —
-    // nunca reconstruido desde el DOM.
-    const _mapa = (window._subticketComponentes && window._subticketComponentes[idEspera]) || {};
-    const componentesSeleccionados = obtenerSeleccionSubtickets_(idEspera, _mapa);
-    const _valSel = validarSeleccionSubtickets_(componentesSeleccionados);
-    if (!_valSel.ok) {
-      if (_valSel.motivo === 'seleccion_vacia') {
-        // Selección vacía: no continúa, cero llamadas API (B-UI4 / C-BE7).
-        if (_elMsg) _elMsg.textContent = 'Selecciona al menos un servicio';
-      } else {
-        // componente_sin_id: id seleccionado sin componente real en el mapa.
-        if (_elMsg) _elMsg.textContent = 'Error: selección inconsistente — volvé a marcar los servicios';
-        console.warn('[confirmarSeleccionSubtickets] selección inconsistente:', idEspera, _valSel.motivo);
-      }
-      return;
-    }
-
-    // ── A partir de acá SÍ se envía la petición — activar guard visual ──
-    window._subticketEnvioEnCurso[idEspera] = true;
-    if (_elBtn) {
-      _elBtn.disabled = true;
-      _elBtn.textContent = 'Iniciando...';
-      _elBtn.style.opacity = '0.6';
-      _elBtn.style.cursor = 'not-allowed';
-    }
-
-    try {
-      // FASE 1 ACOTADA (DEV) Parte E — tercera superficie real de tomarClienta
-      // (botón "Por empezar"/selector de subtickets). Sin reintento automático.
-      const r = await apiPost('tomarClienta', {
-        idEspera: idEspera,
-        chicaNombre: user.name,
-        componentesSeleccionados: componentesSeleccionados
-      }, { retries: 0, timeoutMs: 15000 });
-
-      // No asumir éxito solo por response.success === true — leer los
-      // conteos reales que devuelve iniciarComponentesTicketNativoPorRef_.
-      if (!r || r.success !== true) {
-        if (r && r.error && !r.message) {
-          // FASE 1 ACOTADA (DEV) Parte E — fallo de red/timeout: el backend
-          // puede haber procesado la toma igual. No declarar fracaso
-          // definitivo; refresco liviano para verificar antes de reintentar.
-          if (_elMsg) _elMsg.textContent = 'No se pudo confirmar la respuesta del servidor. Verifica si la clienta ya aparece en atención.';
-          if (typeof showToast === 'function') showToast('⚠ Sin confirmación del servidor — verificando estado…');
-          // CORRECCIÓN PRE-DEV — diferido con setTimeout(...,0): si se
-          // llamara ahora mismo, el guard de Parte 2 lo bloquearía porque
-          // window._subticketEnvioEnCurso[idEspera] sigue en true hasta el
-          // finally de esta misma función. Al diferirlo, se ejecuta recién
-          // después de que el finally libere el guard, y con eso alcanza
-          // para verificar sin destruir la selección de OTROS tickets ni de
-          // este, si el backend todavía no lo procesó.
-          setTimeout(function () {
-            if (typeof refrescarAsignacionesStaff === 'function') refrescarAsignacionesStaff();
-          }, 0);
-          return;
-        }
-        // Error backend: no limpiar selección, no quitar la tarjeta, no
-        // tocar slotServices. El guard se libera en el finally.
-        const _errMsg = (r && r.message) || 'No se pudo iniciar';
-        if (_elMsg) _elMsg.textContent = 'Error: ' + _errMsg;
-        if (typeof showToast === 'function') showToast('⚠ Error al iniciar: ' + _errMsg);
-        return;
-      }
-
-      const _iniciadas = Array.isArray(r.iniciadas) ? r.iniciadas : [];
-      const _yaEnServicio = Array.isArray(r.ya_en_servicio) ? r.ya_en_servicio : [];
-      const _noEncontradas = Array.isArray(r.no_encontradas) ? r.no_encontradas : [];
-      const _pedidos = componentesSeleccionados.length;
-      const _cubiertos = _iniciadas.length + _yaEnServicio.length;
-
-      if (_noEncontradas.length === 0 && _cubiertos === _pedidos) {
-        // Éxito total.
-        if (typeof showToast === 'function') {
-          showToast('▶ ' + _cubiertos + ' servicio' + (_cubiertos > 1 ? 's' : '') + ' iniciado' + (_cubiertos > 1 ? 's' : '') + ' con ' + (nombre || 'la clienta'));
-        }
-      } else {
-        // Éxito parcial (success:true pero hay no_encontradas, o los
-        // conteos no cuadran con lo pedido): NUNCA declarar éxito total.
-        if (typeof showToast === 'function') {
-          showToast('⚠ ' + _cubiertos + ' de ' + _pedidos + ' iniciado' + (_pedidos > 1 ? 's' : '')
-            + (_noEncontradas.length ? (' · ' + _noEncontradas.length + ' no encontrado' + (_noEncontradas.length > 1 ? 's' : '')) : ''));
-        }
-      }
-
-      // Limpieza local SOLO después de respuesta backend exitosa.
-      if (window._subticketSeleccion) delete window._subticketSeleccion[idEspera];
-      if (window._subticketComponentes) delete window._subticketComponentes[idEspera];
-
-      // La pantalla se reconstruye SIEMPRE desde el backend — nunca se
-      // manipulan checkboxes/estado manualmente como fuente de verdad.
-      await loadStaffHome();
-
-    } catch (e) {
-      console.error('[confirmarSeleccionSubtickets] error de red/excepción', e);
-      if (_elMsg) _elMsg.textContent = 'Error de red — volvé a intentar';
-      if (typeof showToast === 'function') showToast('⚠ Error de red al iniciar los servicios');
-      // Selección permanece, tarjeta no desaparece — no se toca el DOM manualmente.
-    } finally {
-      // Guard SIEMPRE liberado. Si hubo éxito, loadStaffHome() ya
-      // reconstruyó la lista (estos elementos pueden no existir más — no-op
-      // seguro). Si hubo error, esto restaura el botón/contador reales.
-      window._subticketEnvioEnCurso[idEspera] = false;
-      _refrescarContadorSubtickets(idEspera);
-    }
-  }
-  window.confirmarSeleccionSubtickets = confirmarSeleccionSubtickets;
 
   function loadActiveService(idx) {
     // Ya precargado en loadStaffHome
@@ -4544,20 +3873,8 @@
               // Ticket madre con varios subtickets → listar cada servicio en su
               // renglón (antes se concatenaban en una sola línea: "A + B + C + D").
               const _subticketsHTML = (a.serviciosDetalle && a.serviciosDetalle.length > 1)
-                ? a.serviciosDetalle.map(d => {
-                    const _cfgDet = {
-                      en_servicio:   { texto: 'EN CURSO',         bg: 'var(--info-bg)',    color: 'var(--info)' },
-                      esperando:     { texto: 'PENDIENTE',        bg: 'var(--bg)',         color: 'var(--ink-faint)' },
-                      por_verificar: { texto: 'COMPLETADO',       bg: 'var(--success-bg)', color: 'var(--success)' },
-                      completado:    { texto: 'LISTO PARA COBRO', bg: 'var(--success-bg)', color: 'var(--success)' },
-                      anulado:       { texto: 'ANULADO',          bg: 'var(--danger-bg)',  color: 'var(--danger)' }
-                    }[String(d.estado || '').toLowerCase()];
-                    const _badgeDet = _cfgDet
-                      ? ' <span style=\"font-size:9px;font-weight:700;background:'+_cfgDet.bg+';color:'+_cfgDet.color+';padding:2px 6px;border-radius:100px;\">'+_cfgDet.texto+'</span>'
-                      : '';
-                    return `<div style=\"font-size:11px;color:var(--ink-soft);\">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong>${_badgeDet}</div>`;
-                  }).join('')
-                : `<div style=\"font-size:11px;color:var(--ink-soft);\">${servicioLimpio}</div>`;
+                ? a.serviciosDetalle.map(d => `<div style="font-size:11px;color:var(--ink-soft);">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong></div>`).join('')
+                : `<div style="font-size:11px;color:var(--ink-soft);">${servicioLimpio}</div>`;
               timelineHTML += `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;">
                 <div style="width:28px;height:28px;border-radius:50%;background:${badgeBg};border:2px solid ${badgeColor};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;animation:pulse 2s infinite;">${iconActual}</div>
                 <div style="flex:1;"><div style="font-size:12px;font-weight:800;color:${badgeColor};">${labelActual} · ${a.tomadaPor}</div>
@@ -4599,34 +3916,11 @@
                   // reales fuera del combo, se respeta el mayor.)
                   totalAcumDisplay = Math.max(_promoPrecioFijo, Number(a.total) || 0);
                 } else {
-                  // FIX PROBLEMA 2A (ver diagnóstico) — serviciosDetalle YA es el desglose
-                  // COMPLETO del ticket (base + extras aprobados), no partes "hechas" que
-                  // falten sumarle a a.total: a.total y totalDetalle describen el MISMO
-                  // total agregado por dos caminos distintos (backend vs. suma de líneas
-                  // mostradas). Sumarlos duplicaba el total — caso real: base $35 + extra
-                  // $5 → a.total=40, totalDetalle=40, se mostraba $80. Se usa el mayor de
-                  // los dos, igual criterio que ya aplica la rama de promo fija arriba —
-                  // nunca la suma. No toca backend, LINEAS ni ServiciosExtras.
-                  totalAcumDisplay = Math.max(totalAcumDisplay, totalDetalle);
+                  // Multi-servicio SIN promo fija: sí se suman las partes hechas + la actual.
+                  totalAcumDisplay = Math.max(totalAcumDisplay, totalDetalle + Number(a.total || 0));
                 }
               }
             }
-            // ── DIAG TEMPORAL — instrumentación de solo lectura, sin cambiar la
-            // fórmula. Retirar una vez cerrado el diagnóstico del ERROR 2.
-            console.log('[DIAG TOTAL EN ATENCION]', {
-              ticketRef: a.idEspera || a.ticket_ref || a.ticketRef,
-              estado: a.estado,
-              fuente: a.fuente,
-              total: a.total,
-              montoTotal: a.monto_total,
-              serviciosDetalle: a.serviciosDetalle,
-              totalDetalle: (a.serviciosDetalle && a.serviciosDetalle.length > 0)
-                ? a.serviciosDetalle.reduce((s, d) => s + Number(d.monto || 0), 0)
-                : null,
-              promoNombre: a.promoNombre,
-              promoPrecioFijo: _promoPrecioFijo,
-              totalAcumDisplay: totalAcumDisplay
-            });
             const totalStr = totalAcumDisplay > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);"><span style="font-size:11px;color:var(--ink-faint);font-weight:600;">TOTAL ACUMULADO</span><span style="font-size:16px;font-weight:800;color:var(--accent-deep);">$${totalAcumDisplay.toFixed(2)}</span></div>` : '';
             const tmBadge = esTM ? ' <span style="font-size:10px;background:var(--accent);color:white;padding:2px 8px;border-radius:100px;font-weight:700;">MULTI</span>' : '';
             const promoStr = a.promoNombre ? `<div style="background:linear-gradient(135deg,var(--accent),var(--accent-deep));color:white;font-size:10px;font-weight:700;padding:3px 10px;border-radius:100px;display:inline-block;margin-bottom:8px;">🏷 ${a.promoNombre}</div>` : '';
@@ -5197,32 +4491,45 @@
     for (var i = 0; i < prods.length; i++) {
       var p = prods[i];
       if (String(p.nombre || '').trim().toLowerCase() === n) {
-        return p.id || p.idProducto || p.ID || p.codigo || p.sku || '';
+        return p.idEstable || '';
       }
     }
     return '';
   }
 
+  // Resuelve el userId que exige el bridge de SIRA (autorizarAccion: token + userId)
+  // a partir del nombre autenticado en NexServ. SIRA_USUARIOS_JSON usa el primer
+  // nombre en minúsculas sin tildes como id (confirmado por auditoría: humberto,
+  // mikaela, diana, yadira, keyla, lesly, maria, laura). Transformación pura y
+  // determinística — NO hardcodea usuarios individuales.
+  // Riesgo conocido, sin resolver: si `nombre` alguna vez trae apellido u otro
+  // texto además del primer nombre, el id resultante no calzará con SIRA.
+  function _siraIdDesdeNombre(nombre) {
+    return String(nombre || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '');
+  }
+
   // Registra un movimiento en SIRA con la acción 'movimiento' — la que VALIDA el
-  // producto, ACTUALIZA el Stock Actual (suma en entrada / resta en salida) y luego
-  // escribe la fila en Movimientos. Antes NexServ usaba 'movimientoNexserv', que solo
-  // hacía append a Movimientos y NO tocaba Stock Actual: por eso una Entrada quedaba
-  // registrada pero el stock no subía. Manda el payload completo (idProducto, fecha,
-  // hora, tipoUnidad, grupo) para que SIRA lo procese igual que desde su propia UI.
+  // producto, ACTUALIZA el Stock Actual (suma en entrada / resta en salida) y
+  // escribe la fila en Movimientos.
+  // AUTENTICACIÓN (confirmado por auditoría contra COPIAR_EN_APPS_SCRIPT.gs):
+  // autorizarAccion() exige sessionToken válido O (token bridge + userId). NexServ
+  // no tiene sesión SIRA, así que manda token bridge + userId. 'movimientoNexserv'
+  // NUNCA existió en el router de SIRA (solo 'movimiento' / 'movimientoBatch') —
+  // por eso siempre caía a "Sesión requerida" sin importar el token.
+  // El userId se resuelve del usuario AUTENTICADO en NexServ (window.currentUser),
+  // no del campo editable "Responsable" del formulario — la staff acreditada en
+  // SIRA debe ser quien realmente inició sesión en NexServ.
   async function _siraRegistrarMov(o) {
     var now = new Date(), gy;
     try { gy = new Date(now.toLocaleString('en-US', { timeZone: 'America/Guayaquil' })); } catch(e) { gy = now; }
     var fecha = gy.getFullYear() + '-' + String(gy.getMonth()+1).padStart(2,'0') + '-' + String(gy.getDate()).padStart(2,'0');
     var hora  = String(gy.getHours()).padStart(2,'0') + ':' + String(gy.getMinutes()).padStart(2,'0');
     var resp  = o.responsable || 'Staff';
-    // AUTENTICACIÓN: NexServ solo tiene TOKEN (no sesión de usuario SIRA). La acción
-    // 'movimiento' exige sesión logueada → devolvía "Sesión requerida". El único endpoint
-    // de escritura que acepta el token es 'movimientoNexserv'. Le mandamos el payload
-    // COMPLETO (idProducto, fecha, hora, tipoUnidad, grupo) para que —una vez que en SIRA
-    // el handler 'movimientoNexserv' agregue la lógica de Stock Actual— ya tenga todo lo
-    // que necesita. Hoy este endpoint registra en Movimientos; el update de stock es la
-    // pieza que falta DEL LADO DE SIRA.
-    return _siraPost('movimientoNexserv', {
+    return _siraPost('movimiento', {
       tipo:        o.tipo || 'salida',
       producto:    o.producto || '',
       idProducto:  (o.idProducto != null && o.idProducto !== '') ? o.idProducto : _siraIdProducto(o.producto),
@@ -5233,7 +4540,8 @@
       hora:        hora,
       tipoUnidad:  o.tipoUnidad || 'Unidad',
       grupo:       o.grupo || (String(resp).replace(/ /g, '_') + '_' + Date.now()),
-      nota:        o.nota || ''
+      nota:        o.nota || '',
+      userId:      _siraIdDesdeNombre(window.currentUser && window.currentUser.name)
     });
   }
 
