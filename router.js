@@ -45,7 +45,7 @@
         }
         if (document.hidden || document.querySelector('.modal-bg.active') || window._staffHomeLoading || window._staffAssignmentsRefreshPromise) return;
         try { await refrescarAsignacionesStaff(); } catch (e) { console.warn('[staffHomeRefresh]', e); }
-      }, 4000);
+      }, 2000);
     } else if (window._staffHomeRefresh) {
       clearInterval(window._staffHomeRefresh); window._staffHomeRefresh = null;
     }
