@@ -212,6 +212,20 @@
     // ----------------------------------------------------------
     asignarServicio: function(opts) {
       return apiPost('asignarServicioNormal', opts);
+    },
+
+    // ----------------------------------------------------------
+    // asignarYIniciarLinea(ticketRef, lineaId)
+    // D7.1 P6-B FASE 3 — "Yo sigo": reclama UNA línea huérfana (esperando,
+    // sin staff) del ticket y la pone en_servicio a nombre de quien la pide.
+    // Manda SOLO ticketRef + lineaId — NUNCA staff: la identidad la inyecta
+    // el backend desde la sesión firmada (ver case 'asignarYIniciarLineaNativa'
+    // en NexServ_AppsScript.js). Si el frontend mandara staff igual, el
+    // backend lo ignora por completo.
+    // Devuelve: Promise → { success, ticket_ref, linea_id, staff, ... }
+    // ----------------------------------------------------------
+    asignarYIniciarLinea: function(ticketRef, lineaId) {
+      return apiPost('asignarYIniciarLineaNativa', { ticketRef: ticketRef, lineaId: lineaId });
     }
 
   }; // end LineaService
