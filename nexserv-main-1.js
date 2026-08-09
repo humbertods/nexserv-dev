@@ -695,28 +695,135 @@
     const _idEsperaChkGate = slot1 ? (window._as1IdEspera || '') : (window._as2IdEspera || '');
 
     if (_fuenteCanonicaChk === 'LINEAS') {
-      // Corrección UX única — LINEAS: finalización parcial. Corta ANTES de
-      // los checks SP-/TM-/SN- de abajo. Lectura fresca de LINEAS (condición
-      // G) decide el botón; si NO quedan líneas pendientes, deja que el
-      // flujo final actual (ya certificado, sin tocar) siga exactamente
-      // igual — no se duplica esa lógica acá.
+      // D7.1 P6-B FASE 4 — matriz real por líneas, reemplaza el
+      // some(estado==='esperando') anterior (B1: cortaba antes de
+      // clasificar staff/área/esPromo por línea real). CASO 1-5 exactos
+      // de D7.1. Todo LEGACY debajo de este bloque permanece intacto.
       const _refLineasChk = _idEsperaChkGate;
       const _staffChk = (window.currentUser && window.currentUser.name) || '';
+
+      // ── Race asíncrona — token/secuencia por slot. Una respuesta vieja de
+      // getTicketLineas nunca pisa un render más nuevo del mismo slot.
+      window._finishButtonsSeq = window._finishButtonsSeq || { 1: 0, 2: 0 };
+      window._finishButtonsSeq[_slotLineasChk] = (window._finishButtonsSeq[_slotLineasChk] || 0) + 1;
+      const _seqLocalChk = window._finishButtonsSeq[_slotLineasChk];
+      function _vigenteChk() { return window._finishButtonsSeq[_slotLineasChk] === _seqLocalChk; }
+
+      // Normaliza minúsculas + sin tildes + sin símbolos/emojis — mismo
+      // criterio que el backend (_lnNormTextoCap_, NexServ_Lineas.gs) y que
+      // el check puedeTodo ya existente más abajo en la rama LEGACY
+      // (división con emoji: '👁 Pestañas' → 'pestanas' limpio).
+      function _normTextoP6B_(s) {
+        s = String(s || '').toLowerCase();
+        try { s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) {}
+        return s.replace(/[^\w\s]/gi, ' ');
+      }
+      // Mirror de SOLO UX del mismo contrato operativo que AREA_CAPS (más
+      // abajo, rama LEGACY) — D7.1 P6-B decisión 2/3: esto NUNCA es
+      // autoridad. Preseleccionar mal acá solo esconde temporalmente un
+      // botón; el backend (_lnStaffPuedeTomarLineaInterno_) vuelve a validar
+      // siempre antes de escribir, y responde STAFF_SIN_CAPACIDAD si no
+      // corresponde.
+      const AREA_CAPS_LINEAS_UX_ = {
+        cejas:    ['cejas', 'depilacion', 'bigote', 'ceja', 'pigment', 'brow', 'lifting', 'retiro'],
+        pestanas: ['pestanas', 'pestaña', 'lifting', 'retiro', 'volumen', 'pelo a pelo',
+                   'efecto aura', 'efecto muñeca', 'clasicas', 'natural', 'extension'],
+        facial:   ['facial', 'hidra', 'limpieza']
+      };
+      function _familiaP6B_(x) {
+        const n = _normTextoP6B_(x);
+        for (const fam in AREA_CAPS_LINEAS_UX_) { if (n.indexOf(fam) >= 0) return fam; }
+        return null;
+      }
+      function _puedeTomarlaP6B_(linea) {
+        const miArea = (window.currentUser && window.currentUser.area) || '';
+        const familia = _familiaP6B_(miArea);
+        if (!familia) return false;
+        const tokens = AREA_CAPS_LINEAS_UX_[familia];
+        const texto = _normTextoP6B_(linea.area || '') + ' ' + _normTextoP6B_(linea.servicio || '');
+        return tokens.some(function (tok) { return texto.indexOf(_normTextoP6B_(tok)) >= 0; });
+      }
+
       apiGet('getTicketLineas', { ticketRef: _refLineasChk }).then(function (r) {
-        const lineasFrescas = (r && r.success === true && Array.isArray(r.lineasActivas)) ? r.lineasActivas : [];
-        const quedanPendientes = lineasFrescas.some(function (l) { return String(l.estado || '').trim() === 'esperando'; });
-        if (quedanPendientes) {
-          btnContainer.innerHTML =
-            '<button class="btn-primary" style="margin-bottom:10px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);font-size:14px;padding:16px;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">✅ Ya hice mi parte — continuar con la siguiente staff</button>';
-        } else {
-          // Nada pendiente → mismo botón/flujo final que ya usan SN-/SP- hoy
-          // (ya certificado end-to-end hasta cobro) — no se reimplementa acá.
-          btnContainer.innerHTML =
-            '<button class="btn-primary" style="margin-bottom:10px;background:var(--ink);color:white;font-size:14px;padding:16px;" onclick="prepararYFinalizar(' + _slotLineasChk + ')">Finalizar servicio</button>';
+        if (!_vigenteChk()) return; // respuesta vieja — ya se renderizó algo más nuevo para este slot
+
+        if (!r || r.success !== true || !Array.isArray(r.lineasActivas)) {
+          // CASO 5 — fail closed. NUNCA cae a "Finalizar servicio" ni a legacy.
+          btnContainer.innerHTML = '<div style="text-align:center;color:var(--danger);font-size:12px;padding:12px;border:1px solid var(--danger);border-radius:10px;">⚠️ No se pudo verificar el estado del ticket. Recargá e intentá de nuevo.</div>';
+          return;
         }
+
+        const staffNChk = _staffChk.trim().toLowerCase();
+        function _esMiaChk_(l)   { return String(l.staff || '').trim().toLowerCase() === staffNChk; }
+        function _esOtraChk_(l)  { const s = String(l.staff || '').trim(); return !!s && s.toLowerCase() !== staffNChk; }
+        function _esPromoChk_(l) {
+          // NUNCA !!l.esPromo — 'no' es string truthy. Campo canónico real
+          // (LX.esPromo en NexServ_Lineas.gs), no se infiere de promoRef/prefijo.
+          return ['si', 'sí', 'true', '1'].indexOf(String(l.esPromo || '').trim().toLowerCase()) >= 0;
+        }
+
+        const lineasChk = r.lineasActivas;
+        const miasEnServicioChk    = lineasChk.filter(function (l) { return _esMiaChk_(l)  && l.estado === 'en_servicio'; });
+        const esperandoSinStaffChk = lineasChk.filter(function (l) { return !String(l.staff || '').trim() && l.estado === 'esperando'; });
+        const ajenasEnServicioChk  = lineasChk.filter(function (l) { return _esOtraChk_(l) && l.estado === 'en_servicio'; });
+        const ajenasEsperandoChk   = lineasChk.filter(function (l) { return _esOtraChk_(l) && l.estado === 'esperando'; });
+
+        // ── CASO 1 — regular único ──────────────────────────────────────
+        if (lineasChk.length === 1 && _esMiaChk_(lineasChk[0]) && lineasChk[0].estado === 'en_servicio' && !_esPromoChk_(lineasChk[0])) {
+          btnContainer.innerHTML = '<button class="btn-primary" style="margin-bottom:10px;background:var(--ink);color:white;font-size:14px;padding:16px;" onclick="prepararYFinalizar(' + _slotLineasChk + ')">Finalizar servicio</button>';
+          return;
+        }
+
+        // ── CASO 4 — otra staff ya trabajando una línea de este ticket ───
+        // Prioridad sobre CASO 3: nunca "yo sigo"/"pasar"/reapropiar
+        // mientras alguien más ya la tiene en curso, aunque además exista
+        // una línea esperandoSinStaff en paralelo. Nunca toca la línea ajena.
+        if (ajenasEnServicioChk.length > 0) {
+          btnContainer.innerHTML = '<button class="btn-primary" style="margin-bottom:10px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);font-size:14px;padding:16px;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">✅ Terminé mi parte</button>';
+          return;
+        }
+
+        // ── CASO 3 — hay una línea esperando sin staff ───────────────────
+        if (esperandoSinStaffChk.length > 0) {
+          // Orden AUTORITATIVO de getTicketLineas (slot → fecha de
+          // creación), nunca por catálogo PROMOS.
+          const siguienteChk = esperandoSinStaffChk[0];
+          const puedeChk = _puedeTomarlaP6B_(siguienteChk);
+          const lblChk = siguienteChk.servicio || siguienteChk.area || 'siguiente servicio';
+          const lineaIdChk = String(siguienteChk.id || '').replace(/'/g, "\\'");
+          let htmlChk = '';
+          if (puedeChk) {
+            htmlChk += '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--ink);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;" onclick="_yoSigoLineas_(' + _slotLineasChk + ",'" + lineaIdChk + "')\">Yo sigo — tomar ahora: " + lblChk + '</button>';
+            htmlChk += '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--accent);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">Pasar ' + lblChk + ' a otra staff (queda en espera)</button>';
+          }
+          // Texto corregido D7.1: NUNCA prometer "enviar a cobro" mientras
+          // queda una línea esperando — mandarTicketNativoACobroPorRef_ la
+          // bloquearía de todos modos (TICKET_COMPONENTES_PENDIENTES). Si
+          // "puede" ya mostró Yo sigo/Pasar, este es el 3er botón (imagen
+          // 3); si "no puede", es el ÚNICO botón — evita el par redundante
+          // "pasar"/"terminé mi parte" cuando ambos harían exactamente lo mismo.
+          htmlChk += '<button style="margin-bottom:8px;width:100%;padding:14px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">✅ Terminé mi parte — continuar con otra staff</button>';
+          btnContainer.innerHTML = htmlChk;
+          return;
+        }
+
+        // ── CASO 2 — multi/promo, todo lo operativo del ticket es mío ────
+        // ajenasEsperandoChk===0 evita prometer "a cobro" si queda una línea
+        // pre-asignada a otra staff que todavía no arrancó.
+        if (miasEnServicioChk.length > 0 && ajenasEsperandoChk.length === 0) {
+          btnContainer.innerHTML = '<button class="btn-primary" style="margin-bottom:10px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);font-size:14px;padding:16px;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">✅ Terminé mi parte — clienta multi-servicio a cobro</button>';
+          return;
+        }
+
+        // ── Fallback defensivo — combinación no contemplada explícitamente
+        // por D7.1 (ej. lo único activo del ticket es una línea ajena
+        // todavía esperando y yo no tengo nada en_servicio). Fail closed,
+        // nunca "Finalizar servicio" ni legacy.
+        btnContainer.innerHTML = '<div style="text-align:center;color:var(--ink-faint);font-size:12px;padding:10px;">Sin acciones disponibles para vos en este momento.</div>';
       }).catch(function (e) {
+        if (!_vigenteChk()) return;
         console.error('[updateFinishButtons][LINEAS]', e);
-        btnContainer.innerHTML = '<div style="text-align:center;color:var(--ink-faint);font-size:12px;padding:10px;">No se pudo cargar el estado del servicio. Recargá e intentá de nuevo.</div>';
+        btnContainer.innerHTML = '<div style="text-align:center;color:var(--danger);font-size:12px;padding:12px;border:1px solid var(--danger);border-radius:10px;">⚠️ No se pudo verificar el estado del ticket. Recargá e intentá de nuevo.</div>';
       });
       return;
     }
@@ -1131,6 +1238,46 @@
     if (typeof loadStaffHome === 'function') { try { await loadStaffHome(); } catch (e) {} }
   }
   window._finalizarParteLineas_ = _finalizarParteLineas_;
+
+  // Handler del botón "Yo sigo — tomar ahora: X" LINEAS (updateFinishButtons,
+  // CASO 3A). D7.1 P6-B FASE 4. Manda SOLO ticketRef+lineaId — NUNCA staff
+  // (identidad la inyecta el backend desde la sesión firmada, ver
+  // lineaService.js/asignarYIniciarLinea y el case en NexServ_AppsScript.js).
+  window._yoSigoLineasEnCurso_ = window._yoSigoLineasEnCurso_ || {};
+  async function _yoSigoLineas_(slot, lineaId) {
+    if (window._yoSigoLineasEnCurso_[slot]) return; // anti doble-toque
+    const ticketRef = slot === 2 ? (window._as2IdEspera || '') : (window._as1IdEspera || '');
+    const lid = String(lineaId || '').trim();
+    if (!ticketRef || !lid) { alert('⚠️ Error interno: datos de la línea perdidos.'); return; }
+
+    window._yoSigoLineasEnCurso_[slot] = true;
+    const btnContainer = document.getElementById('as' + slot + 'FinishBtns');
+    if (btnContainer) btnContainer.innerHTML = '<button class="btn-primary" disabled style="margin-bottom:10px;opacity:0.6;">Procesando...</button>';
+
+    let r;
+    try {
+      r = await LineaService.asignarYIniciarLinea(ticketRef, lid);
+    } catch (e) {
+      r = { success: false, error: 'ERROR_RED', message: String(e) };
+    }
+    window._yoSigoLineasEnCurso_[slot] = false;
+
+    if (!r || r.success !== true) {
+      alert((r && (r.message || r.error)) || 'No se pudo tomar el servicio. Intentá de nuevo.');
+      try { updateFinishButtons(slot); } catch (e) {}
+      return;
+    }
+
+    if (typeof showToast === 'function') showToast('✅ Servicio tomado.');
+    // NO agregar servicio manualmente a slotServices (instrucción D7.1) —
+    // reconstrucción del slot SIEMPRE desde líneas reales. Mismo refresco
+    // completo ya certificado que usa _finalizarParteLineas_ en éxito —
+    // evita reimplementar el reset manual del slot (avatar/nombre/
+    // servicios/botones) con una reconstrucción parcial propia sin probar.
+    if (typeof loadStaffHome === 'function') { try { await loadStaffHome(); } catch (e) {} }
+    else { try { updateFinishButtons(slot); } catch (e) {} }
+  }
+  window._yoSigoLineas_ = _yoSigoLineas_;
 
   // Cuando la staff hizo su parte (1er servicio) y el resto va a otra staff
   async function finishAndSendPartial() {
