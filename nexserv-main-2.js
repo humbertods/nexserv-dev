@@ -1773,6 +1773,106 @@
 
   // === RETIRO GRATIS / $10 ===
 
+  // ── D7.1 P5 — Capa compartida LECTURA / RENDER-CÁLCULO para "Por empezar"
+  // + contadores de staffHome. Usada por loadStaffHome() (carga completa) y
+  // por refrescarAsignacionesStaff() (refresco liviano, ver router.js). ──
+
+  // LECTURA — una sola llamada de red (getTableroLineas vía LineaService).
+  // Contrato: si falla, PROPAGA el error (no lo convierte en []). El caller
+  // decide qué hacer con la UI ante el fallo — loadStaffHome() y
+  // refrescarAsignacionesStaff() lo manejan cada uno con su propio contrato
+  // de error (ver más abajo).
+  async function _obtenerAsignacionesStaff_() {
+    return await LineaService.obtenerListaEspera();
+  }
+
+  // RENDER — "Por empezar": mismo filtro y mismo HTML que existían antes
+  // en loadStaffHome() (sin cambios de comportamiento). No hace red.
+  function _renderPorEmpezarDesdeListaEspera_(lista, user) {
+    const _peSection = document.getElementById('staffPorEmpezarSection');
+    const _peList    = document.getElementById('staffPorEmpezarList');
+    if (!_peSection || !_peList) return;
+    const _mias = (lista || []).filter(function (w) {
+      const est = String(w.estado || w.status || '').toLowerCase().replace('_', ' ');
+      if (est !== 'esperando') return false;   // solo las que aún no empezaron
+      const quien = (w.tomadaPor && String(w.tomadaPor).trim())
+                 || (w.asignadaA && String(w.asignadaA).trim()) || '';
+      return quien && quien.split(',').map(function(s){return s.trim();}).indexOf(user.name) !== -1;
+    });
+    if (_mias.length > 0) {
+      _peSection.style.display = 'block';
+      _peList.innerHTML = _mias.map(function (w) {
+        const _cod = String(w.codigo || '').replace(/'/g, "\\'");
+        const _nom = String(w.nombre || '').replace(/'/g, "\\'");
+        const _svc = String(w.servicio || w.promoNombre || 'Servicio');
+        const _tot = Number(w.total || 0);
+        return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
+          + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
+          + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
+          + '<button onclick="iniciarClientaStaff(\'' + _cod + '\',\'' + _nom + '\')" '
+          + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
+          + '</div>';
+      }).join('');
+    } else {
+      _peSection.style.display = 'none';
+      _peList.innerHTML = '';
+    }
+  }
+
+  // CÁLCULO/RENDER — contadores que pertenecen realmente a staffHome
+  // (navBadge, navBadge2, pendingStat/"Espera"). Mismo filtro que existía
+  // antes en loadStaffHome(). NO toca waitCountMy/waitCountAll — esos son
+  // de la pantalla waitList y los actualiza renderWaitList(), no esta capa.
+  // No hace red.
+  function _actualizarContadoresStaffDesdeLista_(lista, user) {
+    const myCount = (lista || []).filter(function (w) {
+      const est = String(w.estado || w.status || '').toLowerCase();
+      if (est === 'en servicio' || est === 'completada') return false;
+      const quien = (w.asignadaA && String(w.asignadaA).trim()) || (w.tomadaPor && String(w.tomadaPor).trim()) || '';
+      return quien !== '' && quien === user.name;
+    }).length;
+    var _nb = document.getElementById('navBadge'); if (_nb) _nb.textContent = myCount;
+    var _nb2 = document.getElementById('navBadge2'); if (_nb2) _nb2.textContent = myCount;
+    var _ps = document.getElementById('pendingStat'); if (_ps) { var _psv = _ps.querySelector('.value'); if (_psv) _psv.textContent = myCount; }
+  }
+
+  // ── D7.1 P5 — Refresco liviano de "Por empezar" + contadores mientras
+  // staffHome está abierto (ver router.js, intervalo de 4000ms) o después
+  // de un tomarClienta con respuesta ambigua (ver confirmTake_() en
+  // nexserv-main-1.js). Contrato: 1 sola llamada de red por ejecución
+  // (0 getAtenciones, 0 getListaEspera legacy, 0 getFichaPestanas,
+  // 0 obtenerServiciosHoy, 0 POST). Ante fallo de getTableroLineas: la UI
+  // anterior se conserva tal cual (NO se borra "Por empezar", NO se pone el
+  // contador en 0) — LINEAS no degrada silenciosamente a legacy acá. No
+  // navega de pantalla, no cierra modales, no toca slotServices/activePromos. ──
+  async function refrescarAsignacionesStaff() {
+    const user = window.currentUser;
+    if (!user || user.role !== 'staff') return;
+
+    if (window._staffAssignmentsRefreshPromise) {
+      return window._staffAssignmentsRefreshPromise;
+    }
+
+    window._staffAssignmentsRefreshPromise = (async function () {
+      try {
+        const lista = await _obtenerAsignacionesStaff_();
+        _renderPorEmpezarDesdeListaEspera_(lista, user);
+        _actualizarContadoresStaffDesdeLista_(lista, user);
+      } catch (e) {
+        // getTableroLineas falló: se conserva la UI anterior como último
+        // estado conocido. Sin fallback a legacy — contrato de LineaService.
+        console.warn('[refrescarAsignacionesStaff]', e);
+      }
+    })();
+
+    try {
+      return await window._staffAssignmentsRefreshPromise;
+    } finally {
+      window._staffAssignmentsRefreshPromise = null;
+    }
+  }
+  window.refrescarAsignacionesStaff = refrescarAsignacionesStaff;
+
   async function loadStaffHome() {
     // Guard: si SIRA o Comisiones están activos, el DOM de staffHome fue reemplazado
     if (window._siraActivo || window._resumenBackup) return;
@@ -1798,37 +1898,19 @@
       // ── POR EMPEZAR (Espera por staff) ─────────────────────────────────────
       // Clientas asignadas a esta staff que todavía están 'esperando' en LINEAS.
       // La staff toca "Confirmar / Empezar" → iniciarServicioStaff → 'en_servicio'.
+      // D7.1 P5 — lectura compartida con el bloque "Actualizar contadores" de
+      // más abajo (antes eran 2 llamadas a obtenerListaEspera(), ahora 1).
+      // Mismo contrato de error que antes: falla → _listaEsperaLSH queda en
+      // null → este bloque renderiza como lista vacía (comportamiento
+      // idéntico al catch(()=>[]) previo).
+      let _listaEsperaLSH = null;
       try {
-        const _peSection = document.getElementById('staffPorEmpezarSection');
-        const _peList    = document.getElementById('staffPorEmpezarList');
-        if (_peSection && _peList) {
-          const _wait = await LineaService.obtenerListaEspera().catch(function(){ return []; });
-          const _mias = (_wait || []).filter(function (w) {
-            const est = String(w.estado || w.status || '').toLowerCase().replace('_', ' ');
-            if (est !== 'esperando') return false;   // solo las que aún no empezaron
-            const quien = (w.tomadaPor && String(w.tomadaPor).trim())
-                       || (w.asignadaA && String(w.asignadaA).trim()) || '';
-            return quien && quien.split(',').map(function(s){return s.trim();}).indexOf(user.name) !== -1;
-          });
-          if (_mias.length > 0) {
-            _peSection.style.display = 'block';
-            _peList.innerHTML = _mias.map(function (w) {
-              const _cod = String(w.codigo || '').replace(/'/g, "\\'");
-              const _nom = String(w.nombre || '').replace(/'/g, "\\'");
-              const _svc = String(w.servicio || w.promoNombre || 'Servicio');
-              const _tot = Number(w.total || 0);
-              return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
-                + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
-                + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-                + '<button onclick="iniciarClientaStaff(\'' + _cod + '\',\'' + _nom + '\')" '
-                + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
-                + '</div>';
-            }).join('');
-          } else {
-            _peSection.style.display = 'none';
-            _peList.innerHTML = '';
-          }
-        }
+        _listaEsperaLSH = await _obtenerAsignacionesStaff_();
+      } catch (eLSH) {
+        _listaEsperaLSH = null;
+      }
+      try {
+        _renderPorEmpezarDesdeListaEspera_(_listaEsperaLSH || [], user);
       } catch (ePE) { console.warn('[porEmpezar]', ePE); }
       
       if (result.success && result.atenciones && result.atenciones.length > 0) {
@@ -2048,19 +2130,19 @@
       }
       
       // Actualizar contadores
-      const waitResult = await LineaService.obtenerListaEspera().then(function(l){ return {success:true, lista:l}; }).catch(function(){ return apiGet('getListaEspera'); });
+      // D7.1 P5 — reutiliza _listaEsperaLSH (misma lectura del bloque "Por
+      // empezar" de arriba) cuando esa lectura tuvo éxito. Solo si falló,
+      // recurre al fallback legacy getListaEspera — EXACTAMENTE el mismo
+      // contrato de error que tenía este bloque antes de la extracción
+      // (waitResult.success / waitResult.lista, misma forma de objeto).
+      let waitResult;
+      if (_listaEsperaLSH !== null) {
+        waitResult = { success: true, lista: _listaEsperaLSH };
+      } else {
+        waitResult = await apiGet('getListaEspera');
+      }
       if (waitResult.success) {
-        const allowed = AREA_FILTER[user.area] || [];
-        const areaMap2 = { 'cejas': 'cejas', 'depilación': 'depilacion', 'depilacion': 'depilacion', 'pestañas': 'pestanas', 'pestanas': 'pestanas', 'facial': 'facial', 'lifting / retiro': 'retiro_lifting', 'pestañas/cejas': 'retiro_lifting' };
-        // MODELO CENTRALIZADO: contar solo las asignadas a esta staff (igual que la lista)
-        const myCount = waitResult.lista.filter(w => {
-          const est = String(w.estado || w.status || '').toLowerCase();
-          if (est === 'en servicio' || est === 'completada') return false;
-          const quien = (w.asignadaA && String(w.asignadaA).trim()) || (w.tomadaPor && String(w.tomadaPor).trim()) || ''; return quien !== '' && quien === user.name;
-        }).length;
-        var _nb=document.getElementById('navBadge'); if(_nb) _nb.textContent = myCount;
-        var _nb2=document.getElementById('navBadge2'); if(_nb2) _nb2.textContent = myCount;
-        var _ps = document.getElementById('pendingStat'); if (_ps) { var _psv = _ps.querySelector('.value'); if (_psv) _psv.textContent = myCount; }
+        _actualizarContadoresStaffDesdeLista_(waitResult.lista, user);
       }
 
       // Cargar servicios completados hoy
