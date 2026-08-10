@@ -5481,7 +5481,7 @@
 
     panel.innerHTML = bodyHtml
       + '<button id="confirmSvcLineasBtn" class="btn-primary" style="width:100%;margin-top:14px;margin-bottom:10px;background:var(--success);" onclick="_confirmarServicioLineas_(' + slot + ')">✅ Confirmar servicio</button>'
-      + '<button class="btn-primary outline" style="width:100%;" onclick="_cancelarServicioLineas_(' + slot + ')">❌ Cancelar servicio</button>';
+      + '<button class="btn-primary outline" style="width:100%;" onclick="_cancelarServicioLineas_(' + slot + ')">↩️ Devolver a lista de espera</button>';
   }
 
   function _escHtml_(s) {
