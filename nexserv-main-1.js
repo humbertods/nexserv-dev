@@ -1726,15 +1726,16 @@
                         user.area === 'facial' ? 'Facial' : '';
       document.getElementById('waitListRole').textContent = areaLabel;
       const allowed = AREA_FILTER[user.area] || [];
-      // MODELO CENTRALIZADO: contar solo las asignadas a esta staff (igual que la lista)
-      const myCount = WAITLIST.filter(w => {
-        const est = String(w.estado || w.status || '').toLowerCase();
-        if (est === 'en servicio' || est === 'completada') return false;
-        const quien = (w.asignadaA && String(w.asignadaA).trim()) || (w.tomadaPor && String(w.tomadaPor).trim()) || ''; return quien !== '' && quien === user.name;
-      }).length;
-      document.getElementById('navBadge').textContent = myCount;
-      document.getElementById('navBadge2').textContent = myCount;
-      document.getElementById('pendingStat').querySelector('.value').textContent = myCount;
+      // D2-F3-B — NO calcular el badge desde WAITLIST legacy (asignadaA/tomadaPor).
+      // WAITLIST está vacío y su shape es legacy; el ÚNICO autor válido del
+      // contador es _actualizarContadoresStaffDesdeLista_ (main-2), que lee
+      // líneas crudas LINEAS (w.staff) tras loadStaffHome. Acá solo se hace la
+      // inicialización visual permitida (0/estado de carga) para no arrastrar
+      // números de una sesión anterior mientras LINEAS carga. No se filtra
+      // WAITLIST ni se leen asignaciones legacy.
+      var _nbInit = document.getElementById('navBadge'); if (_nbInit) _nbInit.textContent = 0;
+      var _nb2Init = document.getElementById('navBadge2'); if (_nb2Init) _nb2Init.textContent = 0;
+      var _psInit = document.getElementById('pendingStat'); if (_psInit) { var _psvInit = _psInit.querySelector('.value'); if (_psvInit) _psvInit.textContent = 0; }
       
       // Doble atención: solo cejas
       const dualEl = document.getElementById('dualCapacity');
@@ -6053,6 +6054,65 @@ function _refTicketFrontend_(w) {
   return String(_ticketBaseId(raw) || '').trim();
 }
 window._refTicketFrontend_ = _refTicketFrontend_;
+
+// ── D2 — Adaptador de entrada al modal LINEAS desde "Por empezar" (staffHome) ──
+// NO reimplementa la toma: reproduce EXACTAMENTE el mismo contrato de slot que
+// openTake (ver main-1: bloque _fuenteTake==='LINEAS') y termina en
+// showConfirmServiceModal → _confirmarServicioLineas_ → tomarClienta →
+// iniciarComponentesTicketNativoPorRef_ (backend ya certificado, lineaId-first).
+//
+// A diferencia de openTake (que parte del shape waitList y de un índice de
+// _waitListData), este adaptador recibe un GRUPO ya filtrado+agrupado por la
+// pantalla "Por empezar" (solo componentes de la staff actual, estado esperando,
+// mismo ticketRef). El grupo trae: { ticketRef, nombre, codigo, componentes:[
+// {id, servicio, area, monto, staff, estado}] }.
+//
+// Contrato replicado (idéntico a openTake): snapshot _as{slot}PreTomaLineas del
+// estado PREVIO antes de pisar (para que _cancelarServicioLineas_ restaure), y
+// los globals por-slot IdEspera/Client/ClientNameLineas/ServiciosDetalleLineas/
+// LineasSeleccion(+FuenteCanonica=null/FuenteLineas=false). CERO backend al abrir.
+function abrirModalTomaLineasPorEmpezar(grupo) {
+  if (!grupo || !grupo.ticketRef || !Array.isArray(grupo.componentes) || !grupo.componentes.length) {
+    alert('⚠️ No se pudo abrir la confirmación (grupo inválido). Avisá a soporte.');
+    return;
+  }
+  // Slot: mismo criterio que openTake — primer slot libre.
+  var _slot = (!window._as1IdEspera) ? 1 : (!window._as2IdEspera) ? 2 : 1;
+
+  // Snapshot EXACTO del estado previo (idéntico a openTake), para restaurar al cancelar.
+  window['_as' + _slot + 'PreTomaLineas'] = {
+    idEspera: _slot === 1 ? (window._as1IdEspera || '') : (window._as2IdEspera || ''),
+    client:   _slot === 1 ? (window._as1Client   || '') : (window._as2Client   || '')
+  };
+
+  // serviciosDetalle del modal = SOLO los componentes de la staff actual (ya
+  // vienen filtrados desde "Por empezar"; se normaliza el shape que el panel espera).
+  var _detalle = grupo.componentes.map(function (c) {
+    return { id: c.id, servicio: c.servicio, area: c.area, monto: c.monto, staff: c.staff, estado: c.estado };
+  });
+
+  if (_slot === 1) {
+    window._as1IdEspera = grupo.ticketRef;
+    window._as1Client = grupo.codigo || '';
+    window._as1ClientNameLineas = grupo.nombre || '';
+    window._as1ServiciosDetalleLineas = _detalle;
+    window._as1LineasSeleccion = null;
+    window._as1FuenteCanonica = null;
+    window._as1FuenteLineas = false;
+  } else {
+    window._as2IdEspera = grupo.ticketRef;
+    window._as2Client = grupo.codigo || '';
+    window._as2ClientNameLineas = grupo.nombre || '';
+    window._as2ServiciosDetalleLineas = _detalle;
+    window._as2LineasSeleccion = null;
+    window._as2FuenteCanonica = null;
+    window._as2FuenteLineas = false;
+  }
+
+  showConfirmServiceModal(_slot);
+}
+window.abrirModalTomaLineasPorEmpezar = abrirModalTomaLineasPorEmpezar;
+
 // Mapea la respuesta de getTicketLineas (lineasActivas) al shape que el modal ya sabe
 // pintar: cada "área" del modal = una línea. puedeEditar→check, !puedeEditar→candado 🔒.
 function _lineasLineasAAreasModal(r) {
