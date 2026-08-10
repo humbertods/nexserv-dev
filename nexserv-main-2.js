@@ -1788,35 +1788,131 @@
 
   // RENDER — "Por empezar": mismo filtro y mismo HTML que existían antes
   // en loadStaffHome() (sin cambios de comportamiento). No hace red.
+  // ── D2 · Predicado puro compartido — "línea LINEAS asignada a mí, pendiente" ──
+  // Único criterio de verdad para "Por empezar" (render) y el contador
+  // (pendingStat/navBadge). Contrato sobre LÍNEA CRUDA de getTableroLineas:
+  //   estado === 'esperando'  &&  staff !== ''  &&  staff === userName
+  // El campo de asignación real es w.staff (LX.staff) — NO w.asignadaA/w.tomadaPor
+  // (que no existen en la línea cruda). Líneas huérfanas (staff==='') no cuentan
+  // para nadie (R-D2.2). userNameLower debe venir ya en minúsculas/trim.
+  function _esMiaLineaPorEmpezar_(w, userNameLower) {
+    const est = String((w && (w.estado || w.status)) || '').toLowerCase().replace('_', ' ');
+    if (est !== 'esperando') return false;
+    const s = String((w && w.staff) || '').trim();
+    if (!s) return false;
+    return s.toLowerCase() === userNameLower;
+  }
+
   function _renderPorEmpezarDesdeListaEspera_(lista, user) {
     const _peSection = document.getElementById('staffPorEmpezarSection');
     const _peList    = document.getElementById('staffPorEmpezarList');
     if (!_peSection || !_peList) return;
+
+    // ── D2 · PASO 1+2 — Aislamiento EN ORIGEN (R-D2.1 / R-D2.2) ──────────────
+    // Mismo predicado puro que usa el contador — sin criterio duplicado.
+    const _userName = String((user && user.name) || '').trim().toLowerCase();
     const _mias = (lista || []).filter(function (w) {
-      const est = String(w.estado || w.status || '').toLowerCase().replace('_', ' ');
-      if (est !== 'esperando') return false;   // solo las que aún no empezaron
-      const quien = (w.tomadaPor && String(w.tomadaPor).trim())
-                 || (w.asignadaA && String(w.asignadaA).trim()) || '';
-      return quien && quien.split(',').map(function(s){return s.trim();}).indexOf(user.name) !== -1;
+      return _esMiaLineaPorEmpezar_(w, _userName);
     });
-    if (_mias.length > 0) {
+
+    // ── D2-F2 — Guard de ticketRef ausente (fuente LINEAS) ───────────────────
+    // Una línea asignada a mí pero SIN ticketRef no puede tomarse: el adaptador
+    // exige grupo.ticketRef y fallaría al pulsar. No se renderiza como tomable;
+    // se avisa por consola con id/código/staff. Cero backend, sin inventar
+    // identidad por código/clienta/id.
+    const _miasTomables = [];
+    _mias.forEach(function (w) {
+      const ref = String((w && w.ticketRef) || '').trim();
+      if (!ref) {
+        console.warn('[PorEmpezar] línea LINEAS sin ticketRef — no tomable',
+          { id: (w && w.id) || '', codigo: (w && w.codigo) || '', staff: (w && w.staff) || '' });
+        return;
+      }
+      _miasTomables.push(w);
+    });
+
+    // ── D2 · PASO 3 — Agrupar las líneas mías por ticketRef (R-D2.3) ─────────
+    // Una tarjeta por ticket. Dos líneas de la misma staff en el mismo ticket →
+    // una sola tarjeta con N componentes. Dos ticketRef distintos (aunque misma
+    // clienta) → dos tarjetas, nunca se fusionan por código/clienta.
+    const _orden = [];
+    const _porRef = Object.create(null);
+    _miasTomables.forEach(function (w) {
+      const ref = String(w.ticketRef || '').trim();  // garantizado no vacío (guard D2-F2)
+      const key = ref;
+      if (!_porRef[key]) {
+        _porRef[key] = {
+          ticketRef: ref,
+          nombre: String(w.cliente || '').trim(),   // alias cliente→nombre
+          codigo: String(w.codigo || '').trim(),
+          total: 0,                                  // alias Σmonto→total
+          componentes: []
+        };
+        _orden.push(key);
+      }
+      const g = _porRef[key];
+      g.total += Number(w.monto || 0);
+      if (!g.nombre && w.cliente) g.nombre = String(w.cliente).trim();
+      g.componentes.push({
+        id: String(w.id || '').trim(),               // alias id→lineaId
+        servicio: String(w.servicio || '').trim(),
+        area: String(w.area || '').trim(),
+        monto: Number(w.monto || 0),
+        staff: String(w.staff || '').trim(),
+        estado: String(w.estado || '').trim()
+      });
+    });
+    const _grupos = _orden.map(function (k) { return _porRef[k]; });
+
+    if (_grupos.length > 0) {
       _peSection.style.display = 'block';
-      _peList.innerHTML = _mias.map(function (w) {
-        const _cod = String(w.codigo || '').replace(/'/g, "\\'");
-        const _nom = String(w.nombre || '').replace(/'/g, "\\'");
-        const _svc = String(w.servicio || w.promoNombre || 'Servicio');
-        const _tot = Number(w.total || 0);
+      window._porEmpezarGrupos = _porEmpezarGrupos_index(_grupos);  // índice para el onclick
+      _peList.innerHTML = _grupos.map(function (g, gi) {
+        const _nom = String(g.nombre || g.codigo || 'Clienta');
+        const _tot = Number(g.total || 0);
+        const _nComp = g.componentes.length;
+        const _svcResumen = _nComp === 1
+          ? String(g.componentes[0].servicio || 'Servicio')
+          : (_nComp + ' servicios · ' + g.componentes.map(function(c){ return c.servicio; }).join(' + '));
         return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
-          + '<div style="font-weight:800;font-size:15px;">' + (w.nombre || w.codigo || 'Clienta') + '</div>'
-          + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _svc + (_tot ? ' · $' + _tot : '') + '</div>'
-          + '<button onclick="iniciarClientaStaff(\'' + _cod + '\',\'' + _nom + '\')" '
-          + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Confirmar / Empezar</button>'
+          + '<div style="font-weight:800;font-size:15px;">' + _escHtmlPE_(_nom) + '</div>'
+          + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _escHtmlPE_(_svcResumen) + (_tot ? ' · $' + _tot : '') + '</div>'
+          + '<button onclick="_tomarGrupoPorEmpezar_(' + gi + ')" '
+          + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Tomar clienta</button>'
           + '</div>';
       }).join('');
     } else {
       _peSection.style.display = 'none';
       _peList.innerHTML = '';
+      window._porEmpezarGrupos = null;
     }
+  }
+
+  // Guarda el índice de grupos renderizados para que el onclick recupere el
+  // grupo EXACTO (con sus componentes ya filtrados a la staff actual) sin
+  // reconstruir nada desde el DOM.
+  function _porEmpezarGrupos_index(grupos) { return grupos; }
+
+  // Entrada al modal LINEAS existente desde "Por empezar". Recupera el grupo
+  // por índice y delega en el adaptador (main-1) que reproduce el contrato de
+  // openTake. CERO backend acá — la toma real ocurre al pulsar "Confirmar
+  // servicio" dentro del modal (tomarClienta → iniciarComponentesTicketNativoPorRef_).
+  function _tomarGrupoPorEmpezar_(gi) {
+    const grupos = window._porEmpezarGrupos;
+    if (!Array.isArray(grupos) || !grupos[gi]) {
+      alert('⚠️ No se encontró la clienta. Actualizá e intentá de nuevo.');
+      return;
+    }
+    if (typeof window.abrirModalTomaLineasPorEmpezar === 'function') {
+      window.abrirModalTomaLineasPorEmpezar(grupos[gi]);
+    } else {
+      alert('⚠️ No se pudo abrir la confirmación. Avisá a soporte.');
+    }
+  }
+  window._tomarGrupoPorEmpezar_ = _tomarGrupoPorEmpezar_;
+
+  function _escHtmlPE_(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   // CÁLCULO/RENDER — contadores que pertenecen realmente a staffHome
@@ -1825,11 +1921,16 @@
   // de la pantalla waitList y los actualiza renderWaitList(), no esta capa.
   // No hace red.
   function _actualizarContadoresStaffDesdeLista_(lista, user) {
+    // ── D2-F1 — misma fuente que el render: w.staff sobre líneas crudas LINEAS ──
+    // Antes usaba w.asignadaA/w.tomadaPor (inexistentes en la línea cruda de
+    // getTableroLineas) → contaba 0. Ahora usa el MISMO predicado puro que
+    // "Por empezar" (_esMiaLineaPorEmpezar_): estado esperando + staff===yo.
+    // SEMÁNTICA HISTÓRICA PRESERVADA: cuenta LÍNEAS/COMPONENTES pendientes
+    // (una por elemento del array, sin agrupar por ticketRef). Un ticket con 2
+    // líneas mías cuenta 2 aquí, aunque el render muestre 1 sola tarjeta.
+    const _userName = String((user && user.name) || '').trim().toLowerCase();
     const myCount = (lista || []).filter(function (w) {
-      const est = String(w.estado || w.status || '').toLowerCase();
-      if (est === 'en servicio' || est === 'completada') return false;
-      const quien = (w.asignadaA && String(w.asignadaA).trim()) || (w.tomadaPor && String(w.tomadaPor).trim()) || '';
-      return quien !== '' && quien === user.name;
+      return _esMiaLineaPorEmpezar_(w, _userName);
     }).length;
     var _nb = document.getElementById('navBadge'); if (_nb) _nb.textContent = myCount;
     var _nb2 = document.getElementById('navBadge2'); if (_nb2) _nb2.textContent = myCount;
@@ -2130,19 +2231,14 @@
       }
       
       // Actualizar contadores
-      // D7.1 P5 — reutiliza _listaEsperaLSH (misma lectura del bloque "Por
-      // empezar" de arriba) cuando esa lectura tuvo éxito. Solo si falló,
-      // recurre al fallback legacy getListaEspera — EXACTAMENTE el mismo
-      // contrato de error que tenía este bloque antes de la extracción
-      // (waitResult.success / waitResult.lista, misma forma de objeto).
-      let waitResult;
+      // D2-F3-A — política de fallo LINEAS idéntica a refrescarAsignacionesStaff():
+      // si _listaEsperaLSH === null (getTableroLineas falló), NO se llama al
+      // contador — se conserva el último valor conocido. NO se degrada a
+      // getListaEspera legacy: _actualizarContadoresStaffDesdeLista_ consume
+      // líneas crudas LINEAS (w.staff) y el shape legacy (asignadaA/tomadaPor)
+      // daría 0. Solo se recalcula cuando la lectura LINEAS tuvo éxito.
       if (_listaEsperaLSH !== null) {
-        waitResult = { success: true, lista: _listaEsperaLSH };
-      } else {
-        waitResult = await apiGet('getListaEspera');
-      }
-      if (waitResult.success) {
-        _actualizarContadoresStaffDesdeLista_(waitResult.lista, user);
+        _actualizarContadoresStaffDesdeLista_(_listaEsperaLSH, user);
       }
 
       // Cargar servicios completados hoy
