@@ -2787,16 +2787,43 @@
     // Filtrar por área Y por asignación directa
     window._listaEsperaCache = lista;
 
-    const myList = lista.filter(w => {
+    const myList = [];
+    lista.forEach(w => {
       const estado = String(w.estado || w.status || '').toLowerCase();
-      if (estado === 'en servicio' || estado === 'completada') return false;
+      if (estado === 'en servicio' || estado === 'completada') return;
       // MODELO CENTRALIZADO: la staff ve SOLO sus clientas asignadas.
       // Robusto: la columna J (tomadaPor) siempre guarda la staff asignada,
       // aunque el estado quede en 'Esperando'. Así no depende de que el backend
       // ya esté redeployado escribiendo 'Asignada'.
       const quien = (w.asignadaA && String(w.asignadaA).trim())
                  || (w.tomadaPor && String(w.tomadaPor).trim()) || '';
-      return quien !== '' && quien === user.name;
+      if (quien !== '' && quien === user.name) {
+        myList.push(w);
+        return;
+      }
+      // FIX LISTA CANÓNICA — promo multiárea secuencial (orden de Mikaela):
+      // el ticket madre puede no traer staff mientras el otro componente aún
+      // no fue tomado. Si esta staff tiene su propia línea en serviciosDetalle
+      // (asignada por Mikaela, estado 'esperando'), el ticket SÍ es visible
+      // para ella — y la tarjeta debe representar ESA línea, no el genérico
+      // del ticket madre. Un solo ticket → una sola tarjeta (nunca una por línea).
+      if (quien === '' && Array.isArray(w.serviciosDetalle)) {
+        const _lineaStaff = w.serviciosDetalle.find(ln =>
+          String(ln && ln.staff || '').trim() === user.name &&
+          String(ln && ln.estado || '').toLowerCase() === 'esperando'
+        );
+        if (_lineaStaff) {
+          myList.push(Object.assign({}, w, {
+            service:      _lineaStaff.servicio || w.service,
+            area:         _lineaStaff.area     || w.area,
+            _lineaId:     (_lineaStaff.id !== undefined ? _lineaStaff.id : null),
+            _lineaSlot:   (_lineaStaff.slot !== undefined ? _lineaStaff.slot : null),
+            _lineaMonto:  (_lineaStaff.monto !== undefined ? _lineaStaff.monto : null),
+            _lineaEstado: _lineaStaff.estado || null,
+            _viaComponente: true
+          }));
+        }
+      }
     });
     
     document.getElementById('waitCountMy').textContent = myList.length;
