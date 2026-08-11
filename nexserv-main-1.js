@@ -1190,7 +1190,22 @@
       return { success: false, error: 'ERROR_FINALIZAR', message: String(e) };
     }
     if (!resultFin || resultFin.success !== true) {
-      return { success: false, error: (resultFin && resultFin.error) || 'ERROR_FINALIZAR', detalle: resultFin };
+      // DIAGNÓSTICO D: el backend puede fallar en dos formas distintas —
+      // {success:false, error:'X'} (validación previa) o {success:false,
+      // errores:[{linea_id,error:'Y'}]} (fallo en la finalización real de al
+      // menos una línea, PASADA 2) — esta segunda forma NO trae `.error` al
+      // nivel superior, solo `.errores[]`. El fallback anterior solo miraba
+      // `.error` y por eso siempre mostraba el genérico 'ERROR_FINALIZAR' en
+      // el segundo caso, ocultando la causa real que el backend sí calculó.
+      const _errReal = (resultFin && resultFin.error)
+        || (
+          resultFin &&
+          Array.isArray(resultFin.errores) &&
+          resultFin.errores[0] &&
+          resultFin.errores[0].error
+        )
+        || 'ERROR_FINALIZAR';
+      return { success: false, error: _errReal, detalle: resultFin };
     }
 
     // 4) Releer LINEAS para saber si queda algo esperando (otra staff) —
