@@ -2772,7 +2772,7 @@
             : `${staff.area} · Disponible`);
       const initials = staff.name[0];
       const html = `
-        <div class="client-row" onclick="goAssign('${staff.name}')">
+        <div class="client-row" onclick="goAssign('${staff.name}', '${staff.area}')">
           <div class="client-avatar">${initials}</div>
           <div class="client-info">
             <div class="client-name">${staff.name}</div>
@@ -2794,7 +2794,7 @@
     document.getElementById('assignDirectStaffList').innerHTML = out;
   }
 
-  async function goAssign(chica) {
+  async function goAssign(chica, areaStaff) {
     // Guard: evitar doble ejecución por touch+click o doble tap
     if (window._goAssignRunning) return;
     window._goAssignRunning = true;
@@ -2813,8 +2813,6 @@
     }
     // ── FIN MANDAMIENTO #8 ──
 
-    // Leer área del formulario TM unificado
-    const area = getAreaFromTMForm();
     const _svcRawGA = svcEl?.value || '';
     let servicioGA = _svcRawGA, precioGA = 0;
     try { if (_svcRawGA.startsWith('{')) { const _d = JSON.parse(_svcRawGA); servicioGA = _d.nombre || _svcRawGA; precioGA = _d.precio || 0; } } catch(e) {}
@@ -2823,6 +2821,13 @@
     const promo = window._arrPromo || null;
 
     const _areaMapGA = { 'Cejas': 'cejas', 'Depilación': 'depilacion', 'Pestañas': 'pestanas', 'Lifting / Retiro': 'retiro_lifting', 'Facial': 'facial' };
+    // FIX ORDEN DE MIKAELA: el área inicial de una promo multiárea la determina
+    // la staff elegida (Mikaela hace click en la staff primero), NO el primer
+    // slot/formulario TM. `areaStaff` viene de renderAssignDirectStaff() con la
+    // especialidad real de la staff (metadata estable, no texto de UI). Si no
+    // llega (u otro caller futuro no la provee), se conserva EXACTAMENTE el
+    // comportamiento anterior: leer del formulario TM.
+    const area = (areaStaff && _areaMapGA[areaStaff]) ? areaStaff : getAreaFromTMForm();
     const areaKey = _areaMapGA[area] || 'cejas';
 
     const postData = {
