@@ -1796,6 +1796,15 @@
   // (que no existen en la línea cruda). Líneas huérfanas (staff==='') no cuentan
   // para nadie (R-D2.2). userNameLower debe venir ya en minúsculas/trim.
   function _esMiaLineaPorEmpezar_(w, userNameLower) {
+    // ── PREREQ-A2 (GATE 0 remediación) — Home paralelo "Por empezar" debe
+    // quedar exclusivamente para fuente NO-LINEAS. Para fuente LINEAS la
+    // única entrada operativa es Lista de espera → modal canónico. Se lee
+    // ÚNICAMENTE w.fuente (campo real de getTableroLineas) — nunca se infiere
+    // por prefijo SN/SP/TM/LE, ticketRef, presencia de lineaId ni
+    // serviciosDetalle. Fuente vacía o distinta de LINEAS conserva EXACTAMENTE
+    // la lógica anterior (no se inventa fallback ni se convierte '' en LINEAS).
+    const fuente = String((w && w.fuente) || '').trim().toUpperCase();
+    if (fuente === 'LINEAS') return false;
     const est = String((w && (w.estado || w.status)) || '').toLowerCase().replace('_', ' ');
     if (est !== 'esperando') return false;
     const s = String((w && w.staff) || '').trim();
@@ -4162,7 +4171,12 @@
                 ${_subticketsHTML}
                 <div style="font-size:10px;color:var(--ink-faint);">Desde ${a.horaToma || '?'}${esPendConf?' · Esperando confirmación':''}</div></div>
                 ${_badgeGrupoHTML}</div>`;
-              if (a.promoNombre) {
+              // PREREQ-E (GATE 0) — antes: este fallback corría siempre que
+              // a.promoNombre existiera, incluso cuando _subticketsHTML ya
+              // había dibujado el desglose moderno completo (línea esperando
+              // incluida) → duplicado visual. Ahora solo reconstruye desde
+              // catálogo PROMOS cuando NO hay desglose moderno operativo.
+              if (a.promoNombre && !(_esModernoP3 && _detOperativosP3.length > 0)) {
                 const promoFull = (PROMOS || []).find(p => p.name === a.promoNombre);
                 if (promoFull && promoFull.division) {
                   const areaActualNorm = String(a.area||'').toLowerCase().replace('ó','o').replace('á','a').replace('é','e').replace('ñ','n');
