@@ -2794,6 +2794,30 @@
     document.getElementById('assignDirectStaffList').innerHTML = out;
   }
 
+  // ── D — identidad de operación para creación nativa de promo multiárea ────
+  // Genera UN requestId por intención de "Asignar directo" (2+ áreas). Mismo
+  // patrón que _nuevoExtraLineRequestId_ (nexserv-main-2.js) — no se reusa esa
+  // función porque es local a su propio módulo (nunca se exporta a window) y
+  // main-2.js está congelado; esto no es un segundo estándar, es la misma
+  // técnica aplicada donde hace falta. Formato exigido por
+  // _lnValidarDatosTicketNativo_/_lnValidarLineRequestId_ (NexServ_Lineas.gs):
+  // [A-Za-z0-9_-], ≤128 chars. Prefijo corto para dejar margen a los sufijos
+  // deterministas por componente ('-L2', '-L3', ...) sin acercarse al límite.
+  function _nuevoTicketRequestId_() {
+    var raw = '';
+    try {
+      if (typeof crypto !== 'undefined' && crypto && typeof crypto.randomUUID === 'function') {
+        raw = crypto.randomUUID().replace(/-/g, '');
+      }
+    } catch (e) { raw = ''; }
+    if (!raw) {
+      raw = Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+          + Math.random().toString(36).slice(2, 10);
+    }
+    var id = ('TKR_' + raw).replace(/[^A-Za-z0-9_-]/g, '');
+    return id.slice(0, 40); // corto a propósito: deja margen de sobra para '-L2'..'-L99' bajo 128
+  }
+
   async function goAssign(chica, areaStaff) {
     // Guard: evitar doble ejecución por touch+click o doble tap
     if (window._goAssignRunning) return;
@@ -2812,6 +2836,13 @@
       if (_c8ga && _c8ga.tipo) console.log('🎯 M8 clasificación (assign):', _c8ga);
     }
     // ── FIN MANDAMIENTO #8 ──
+
+    // Identidad de ESTE intento — nace una sola vez acá, viaja tal cual en el
+    // payload; apiPost reintenta el MISMO payload automáticamente (api.js,
+    // retries=2 por defecto), así que sus reintentos conservan este mismo
+    // requestId sin que se regenere. NO se regenera en LineaService,
+    // handleCrearTicketMulti ni crearTicketPromoNativo_.
+    const _requestIdGA = _nuevoTicketRequestId_();
 
     const _svcRawGA = svcEl?.value || '';
     let servicioGA = _svcRawGA, precioGA = 0;
@@ -2925,7 +2956,11 @@
         // no lo indica (el orden de sus componentes no es significativo,
         // ver buildTMAreasFromForm), así que sin este campo la asignación
         // por familia de área (promo nativa) no tendría con qué comparar.
-        areaInicial: areaKey
+        areaInicial: areaKey,
+        // requestId: identidad estable de ESTE intento (generado arriba, una
+        // sola vez). Permite a crearTicketPromoNativo_ detectar reintentos
+        // automáticos de apiPost sin crear tickets/líneas duplicados.
+        requestId: _requestIdGA
       });
       if (tmResult && tmResult.success) {
         initFormTM();
