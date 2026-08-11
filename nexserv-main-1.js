@@ -674,6 +674,41 @@
     return misPartes.reduce((s, d) => s + Number(d.monto || 0), 0);
   }
 
+  // ── D7.1 PREREQ-B (GATE 0 remediación) — Helpers de capacidad LINEAS
+  // elevados a scope de módulo. Antes vivían anidados dentro del closure de
+  // updateFinishButtons, por lo que _renderConfirmSvcLineasPanel_ no podía
+  // reutilizarlos (bug confirmado en GATE 0). Se elevan TAL CUAL — misma
+  // lógica, mismos tokens, ninguna capacidad nueva ni tabla nueva — solo
+  // cambia el scope. Mirror de SOLO UX del mismo contrato operativo que
+  // AREA_CAPS (rama LEGACY) — D7.1 P6-B decisión 2/3: esto NUNCA es
+  // autoridad. El backend (_lnStaffPuedeTomarLineaInterno_) vuelve a validar
+  // siempre antes de escribir, y responde STAFF_SIN_CAPACIDAD si no
+  // corresponde.
+  function _normTextoP6B_(s) {
+    s = String(s || '').toLowerCase();
+    try { s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) {}
+    return s.replace(/[^\w\s]/gi, ' ');
+  }
+  const AREA_CAPS_LINEAS_UX_ = {
+    cejas:    ['cejas', 'depilacion', 'bigote', 'ceja', 'pigment', 'brow', 'lifting', 'retiro'],
+    pestanas: ['pestanas', 'pestaña', 'lifting', 'retiro', 'volumen', 'pelo a pelo',
+               'efecto aura', 'efecto muñeca', 'clasicas', 'natural', 'extension'],
+    facial:   ['facial', 'hidra', 'limpieza']
+  };
+  function _familiaP6B_(x) {
+    const n = _normTextoP6B_(x);
+    for (const fam in AREA_CAPS_LINEAS_UX_) { if (n.indexOf(fam) >= 0) return fam; }
+    return null;
+  }
+  function _puedeTomarlaP6B_(linea) {
+    const miArea = (window.currentUser && window.currentUser.area) || '';
+    const familia = _familiaP6B_(miArea);
+    if (!familia) return false;
+    const tokens = AREA_CAPS_LINEAS_UX_[familia];
+    const texto = _normTextoP6B_(linea.area || '') + ' ' + _normTextoP6B_(linea.servicio || '');
+    return tokens.some(function (tok) { return texto.indexOf(_normTextoP6B_(tok)) >= 0; });
+  }
+
   // Actualiza los botones de finalización según si hay promo multi-área activa
   function updateFinishButtons(slot) {
     const slot1 = slot === 1 || !slot;
@@ -709,40 +744,10 @@
       const _seqLocalChk = window._finishButtonsSeq[_slotLineasChk];
       function _vigenteChk() { return window._finishButtonsSeq[_slotLineasChk] === _seqLocalChk; }
 
-      // Normaliza minúsculas + sin tildes + sin símbolos/emojis — mismo
-      // criterio que el backend (_lnNormTextoCap_, NexServ_Lineas.gs) y que
-      // el check puedeTodo ya existente más abajo en la rama LEGACY
-      // (división con emoji: '👁 Pestañas' → 'pestanas' limpio).
-      function _normTextoP6B_(s) {
-        s = String(s || '').toLowerCase();
-        try { s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); } catch (e) {}
-        return s.replace(/[^\w\s]/gi, ' ');
-      }
-      // Mirror de SOLO UX del mismo contrato operativo que AREA_CAPS (más
-      // abajo, rama LEGACY) — D7.1 P6-B decisión 2/3: esto NUNCA es
-      // autoridad. Preseleccionar mal acá solo esconde temporalmente un
-      // botón; el backend (_lnStaffPuedeTomarLineaInterno_) vuelve a validar
-      // siempre antes de escribir, y responde STAFF_SIN_CAPACIDAD si no
-      // corresponde.
-      const AREA_CAPS_LINEAS_UX_ = {
-        cejas:    ['cejas', 'depilacion', 'bigote', 'ceja', 'pigment', 'brow', 'lifting', 'retiro'],
-        pestanas: ['pestanas', 'pestaña', 'lifting', 'retiro', 'volumen', 'pelo a pelo',
-                   'efecto aura', 'efecto muñeca', 'clasicas', 'natural', 'extension'],
-        facial:   ['facial', 'hidra', 'limpieza']
-      };
-      function _familiaP6B_(x) {
-        const n = _normTextoP6B_(x);
-        for (const fam in AREA_CAPS_LINEAS_UX_) { if (n.indexOf(fam) >= 0) return fam; }
-        return null;
-      }
-      function _puedeTomarlaP6B_(linea) {
-        const miArea = (window.currentUser && window.currentUser.area) || '';
-        const familia = _familiaP6B_(miArea);
-        if (!familia) return false;
-        const tokens = AREA_CAPS_LINEAS_UX_[familia];
-        const texto = _normTextoP6B_(linea.area || '') + ' ' + _normTextoP6B_(linea.servicio || '');
-        return tokens.some(function (tok) { return texto.indexOf(_normTextoP6B_(tok)) >= 0; });
-      }
+      // _normTextoP6B_ / AREA_CAPS_LINEAS_UX_ / _familiaP6B_ / _puedeTomarlaP6B_
+      // — PREREQ-B: elevados a scope de módulo (ver arriba, antes de
+      // updateFinishButtons). Se resuelven por closure normal desde acá,
+      // misma referencia que usa ahora también _renderConfirmSvcLineasPanel_.
 
       apiGet('getTicketLineas', { ticketRef: _refLineasChk }).then(function (r) {
         if (!_vigenteChk()) return; // respuesta vieja — ya se renderizó algo más nuevo para este slot
@@ -5479,7 +5484,17 @@
         const monto = Number(d.monto || 0);
         const st = String(d.estado || '').trim().toLowerCase();
         const staffLinea = String(d.staff || '').trim();
-        const esMia = !staffLinea || staffLinea.toLowerCase() === _staffActual;
+        const asignadaAMi = !!staffLinea && staffLinea.toLowerCase() === _staffActual;
+        const asignadaAOtra = !!staffLinea && staffLinea.toLowerCase() !== _staffActual;
+        const sinStaff = !staffLinea;
+        // PREREQ-B (GATE 0) — antes: sinStaff SIEMPRE se trataba como esMia,
+        // sin verificar capacidad real. Ahora usa el mismo helper elevado
+        // que updateFinishButtons: sinStaff solo es "mía" si esta staff
+        // tiene capacidad real para esa línea (_puedeTomarlaP6B_). El
+        // backend (_lnStaffPuedeTomarLineaInterno_) sigue siendo la
+        // autoridad real; esto es solo UX preventiva.
+        const puedoTomarla = sinStaff && _puedeTomarlaP6B_(d);
+        const esMia = asignadaAMi || puedoTomarla;
 
         if (st === 'completado') {
           return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--success-bg);border-radius:12px;margin-bottom:8px;opacity:0.85;">'
