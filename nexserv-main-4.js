@@ -2922,7 +2922,18 @@
             esTop: isTop ? 'Sí' : 'No', total: aGA.precio,
             promoNombre: aGA.tentativo, precioPromo: aGA.precio,
             precioRegular: aGA.precioNormal || aGA.precio,
-            asignadaA: chica
+            asignadaA: chica,
+            // requestId: identidad estable de ESTE intento — el MISMO
+            // _requestIdGA generado arriba (una sola vez, antes de ambas
+            // ramas) y que la rama multi ya venía enviando. Esta rama
+            // enruta por LineaService → addServicioPromo →
+            // handleAddServicioPromo → crearTicketPromoNativo_, que lo
+            // exige y devolvía REQUEST_ID_REQUERIDO al faltar. No se
+            // genera otro acá, ni en LineaService, ni en el backend: los
+            // reintentos automáticos de apiPost reenvían este mismo
+            // payload, así que el valor se conserva y la idempotencia
+            // nativa puede detectarlos.
+            requestId: _requestIdGA
           });
         } else {
           result = await LineaService.crearServicio( {
