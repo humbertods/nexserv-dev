@@ -226,6 +226,31 @@
     // ----------------------------------------------------------
     asignarYIniciarLinea: function(ticketRef, lineaId) {
       return apiPost('asignarYIniciarLineaNativa', { ticketRef: ticketRef, lineaId: lineaId });
+    },
+
+    // ----------------------------------------------------------
+    // completarActualYContinuar(ticketRef, lineaActualId, lineaSiguienteId)
+    // CONTINUAR_MISMA_STAFF — transición ATÓMICA: completa la línea actual
+    // (en_servicio, mía) e inicia la siguiente (esperando, sin staff,
+    // compatible) en UNA sola transacción backend. Reemplaza al par
+    // "finalizar + asignarYIniciar" que dejaba una ventana observable con la
+    // actual ya completada y la siguiente todavía esperando.
+    // El backend (completarActualYContinuarLineaNativa, NexServ_Lineas.gs)
+    // valida todo en una pasada de solo lectura antes de escribir, verifica
+    // por relectura y compensa LINEAS+TicketsFuente si algo falla — NO se
+    // implementa rollback acá.
+    // Manda SOLO los tres ids — NUNCA staff: la identidad la inyecta el
+    // backend desde la sesión firmada (ver case 'completarActualYContinuar-
+    // LineaNativa' en NexServ_AppsScript.js). Si el frontend mandara staff
+    // igual, el backend lo ignora por completo.
+    // Devuelve: Promise → { success, ticket_ref, linea_actual, linea_siguiente, ... }
+    // ----------------------------------------------------------
+    completarActualYContinuar: function(ticketRef, lineaActualId, lineaSiguienteId) {
+      return apiPost('completarActualYContinuarLineaNativa', {
+        ticketRef: ticketRef,
+        lineaActualId: lineaActualId,
+        lineaSiguienteId: lineaSiguienteId
+      });
     }
 
   }; // end LineaService
