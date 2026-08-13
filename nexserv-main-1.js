@@ -700,14 +700,306 @@
     for (const fam in AREA_CAPS_LINEAS_UX_) { if (n.indexOf(fam) >= 0) return fam; }
     return null;
   }
-  function _puedeTomarlaP6B_(linea) {
-    const miArea = (window.currentUser && window.currentUser.area) || '';
-    const familia = _familiaP6B_(miArea);
+  // Variante PURA: recibe el área explícitamente en vez de leerla de
+  // window.currentUser. Misma tabla, mismos tokens, misma lógica — existe
+  // solo para que _clasificarEscenarioLineasCentral_ pueda usarla sin tocar
+  // globals. NO es una segunda tabla de capacidades.
+  function _puedeTomarlaConAreaP6B_(linea, areaStaff) {
+    const familia = _familiaP6B_(areaStaff || '');
     if (!familia) return false;
     const tokens = AREA_CAPS_LINEAS_UX_[familia];
-    const texto = _normTextoP6B_(linea.area || '') + ' ' + _normTextoP6B_(linea.servicio || '');
+    const texto = _normTextoP6B_((linea && linea.area) || '') + ' ' +
+                  _normTextoP6B_((linea && linea.servicio) || '');
     return tokens.some(function (tok) { return texto.indexOf(_normTextoP6B_(tok)) >= 0; });
   }
+  function _puedeTomarlaP6B_(linea) {
+    const miArea = (window.currentUser && window.currentUser.area) || '';
+    return _puedeTomarlaConAreaP6B_(linea, miArea);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // CLASIFICADOR UNIVERSAL DE ESCENARIOS LINEAS / CENTRAL
+  // ══════════════════════════════════════════════════════════════════════
+  // Reemplaza la matriz de precedencia CASO 1-5 de updateFinishButtons, que
+  // clasificaba mirando el estado ANTES de finalizar. Este clasificador
+  // responde la pregunta correcta: "¿qué quedará pendiente DESPUÉS de
+  // completar mis líneas actuales?" — mediante una simulación puramente
+  // lógica/in-memory. NO escribe en LINEAS, no llama apiGet/apiPost, no toca
+  // DOM, no muta globals ni slotServices. Misma entrada → misma salida.
+  //
+  // Contrato de estados (valores REALES del proyecto, no inventados):
+  //   operativos  : 'esperando' | 'en_servicio'
+  //   terminales  : 'por_verificar' | 'completado' | 'cobrado' | 'anulado'
+  //   auth operativa: LN3_AUTH_OPERATIVOS backend = ['no_requiere','aprobada']
+  //                   (dominio completo LINEAS_AUTH_ESTADOS añade
+  //                    'pendiente' | 'denegada' → NO operativas)
+  //
+  // GAP_PROPUESTA_INVISIBLE — getTicketLineas() omite de lineasActivas las
+  // líneas en estado técnico 'propuesta' (ESTADOS_ACTIVOS no lo incluye), y
+  // solo informa su existencia vía conteos.tecnicas / avisos. Por eso el
+  // caller pasa `hayLineasTecnicasOmitidas`: cuando es true, el clasificador
+  // NO puede afirmar "no queda absolutamente nada pendiente" y opera
+  // fail-closed. NUNCA se reconstruyen esas líneas, ni se fabrican objetos
+  // ficticios, ni se eligen como siguiente. No se parsea `avisos` (texto
+  // humano) para adivinar de qué tipo son.
+  // ══════════════════════════════════════════════════════════════════════
+  const _LN_ESTADOS_OPERATIVOS_UX_ = ['esperando', 'en_servicio'];
+  const _LN_AUTH_OPERATIVOS_UX_    = ['no_requiere', 'aprobada'];
+
+  function _clasificarEscenarioLineasCentral_(ctx) {
+    ctx = ctx || {};
+    const lineas    = Array.isArray(ctx.lineas) ? ctx.lineas : [];
+    const staffN    = String(ctx.staffActual || '').trim().toLowerCase();
+    const areaStaff = String(ctx.areaStaff || '');
+    const hayTecnicas = ctx.hayLineasTecnicasOmitidas === true;
+
+    function _est(l)  { return String((l && l.estado) || '').trim().toLowerCase(); }
+    function _stf(l)  { return String((l && l.staff)  || '').trim(); }
+    function _auth(l) { return String((l && l.authEstado) || '').trim().toLowerCase(); }
+    function _esMia(l)   { return !!_stf(l) && _stf(l).toLowerCase() === staffN; }
+    function _esOtra(l)  { return !!_stf(l) && _stf(l).toLowerCase() !== staffN; }
+    function _operativa(l) { return _LN_ESTADOS_OPERATIVOS_UX_.indexOf(_est(l)) >= 0; }
+    function _authOk(l)  {
+      // authEstado vacío = línea legacy sin el campo → se trata como
+      // operativa (mismo criterio que el backend, que solo bloquea valores
+      // explícitamente no operativos).
+      const a = _auth(l);
+      return a === '' || _LN_AUTH_OPERATIVOS_UX_.indexOf(a) >= 0;
+    }
+
+    // ── Buckets ────────────────────────────────────────────────────────
+    const operativas      = lineas.filter(_operativa);
+    const terminales      = lineas.filter(function (l) { return !_operativa(l); });
+    const bloqueantes     = operativas.filter(function (l) { return !_authOk(l); });
+    const misEnServicio   = operativas.filter(function (l) { return _esMia(l)  && _est(l) === 'en_servicio'; });
+    const esperandoMias   = operativas.filter(function (l) { return _esMia(l)  && _est(l) === 'esperando'; });
+    const esperandoAjenas = operativas.filter(function (l) { return _esOtra(l) && _est(l) === 'esperando'; });
+    const ajenasEnServicio= operativas.filter(function (l) { return _esOtra(l) && _est(l) === 'en_servicio'; });
+    const esperandoSinStaff = operativas.filter(function (l) { return !_stf(l) && _est(l) === 'esperando'; });
+
+    const base = {
+      misLineaIds: misEnServicio.map(function (l) { return l.id; }).filter(Boolean),
+      siguienteLinea: null,
+      hayPendientesPost: false,
+      hayOtraStaffEnCurso: ajenasEnServicio.length > 0,
+      hayOtraStaffPreasignada: esperandoAjenas.length > 0,
+      hayLineasTecnicasOmitidas: hayTecnicas,
+      buckets: {
+        misEnServicio: misEnServicio.length,
+        esperandoMias: esperandoMias.length,
+        esperandoSinStaff: esperandoSinStaff.length,
+        esperandoAjenas: esperandoAjenas.length,
+        ajenasEnServicio: ajenasEnServicio.length,
+        terminales: terminales.length,
+        bloqueantes: bloqueantes.length
+      }
+    };
+    function _res(escenario, extra) {
+      const o = { escenario: escenario };
+      for (const k in base)  o[k] = base[k];
+      for (const k2 in (extra || {})) o[k2] = extra[k2];
+      return o;
+    }
+
+    // ── 1. BLOQUEADO_AUTORIZACION — fail closed, precedencia máxima ─────
+    // Una línea operativa visible con autorización no operativa NO puede
+    // interpretarse como una línea esperando normal ni permitir cierre.
+    if (bloqueantes.length > 0) {
+      return _res('BLOQUEADO_AUTORIZACION', {
+        motivo: 'linea_operativa_con_autorizacion_no_operativa',
+        hayPendientesPost: true
+      });
+    }
+
+    // ── 2. Sin líneas propias en_servicio → nada que finalizar ──────────
+    if (misEnServicio.length === 0) {
+      return _res('SIN_ACCION_VALIDA', { motivo: 'sin_lineas_propias_en_servicio' });
+    }
+
+    // ── 3. SIMULACIÓN POST-FINALIZACIÓN (pura, in-memory) ──────────────
+    // estadoPost = operativas − mis líneas en_servicio (que quedarían
+    // completadas). Nada se escribe: solo se filtra la lista recibida.
+    const misIds = {};
+    misEnServicio.forEach(function (l) { if (l && l.id) misIds[String(l.id)] = true; });
+    const pendientesPost = operativas.filter(function (l) {
+      return !(l && l.id && misIds[String(l.id)]);
+    });
+    base.hayPendientesPost = pendientesPost.length > 0;
+
+    // ── 4. No quedan pendientes VISIBLES tras mi finalización ──────────
+    if (pendientesPost.length === 0) {
+      // GAP_PROPUESTA_INVISIBLE — fail closed: existen líneas técnicas que
+      // getTicketLineas omitió, así que "no queda nada pendiente" no puede
+      // afirmarse. No se etiqueta como autorización (no está demostrado).
+      if (hayTecnicas) {
+        return _res('BLOQUEADO_ESTADO_TECNICO', {
+          motivo: 'lineas_tecnicas_omitidas_impiden_afirmar_cierre_total',
+          hayPendientesPost: true
+        });
+      }
+      // Servicio único: una sola línea operativa en todo el ticket, mía.
+      if (operativas.length === 1 && terminales.length === 0) {
+        return _res('FINALIZAR_UNICO', { motivo: 'unica_linea_operativa_propia' });
+      }
+      // Varias líneas mías en curso → batch de mis componentes y cierre.
+      if (misEnServicio.length > 1) {
+        return _res('FINALIZAR_MIS_COMPONENTES_Y_CERRAR', { motivo: 'todas_mis_lineas_cierran_el_ticket' });
+      }
+      // Última parte operativa del ticket (hay terminales de otras staff).
+      // FINALIZAR_TICKET es funcionalmente equivalente a este escenario
+      // (mismo texto, mismo handler batch): se mantiene UN solo escenario
+      // para no duplicar implementación — autorizado por §9.5 de la orden.
+      return _res('FINALIZAR_ULTIMA_PARTE', { motivo: 'ultima_parte_operativa_del_ticket' });
+    }
+
+    // ── 5. Quedan pendientes: otra staff YA trabajando tiene precedencia ─
+    // Nunca ofrecer continuidad/reapropiación mientras alguien más está en
+    // curso, aunque además exista una línea esperando sin staff.
+    if (ajenasEnServicio.length > 0) {
+      return _res('FINALIZAR_MI_PARTE_CON_OTRA_STAFF_EN_CURSO', {
+        motivo: 'otra_staff_en_servicio_en_el_mismo_ticket'
+      });
+    }
+
+    // ── 6. ¿Puedo continuar yo misma con una línea compatible? ──────────
+    // GATE DE MATERIALIZABILIDAD: la primitiva atómica existente
+    // (completarActualYContinuarLineaNativa) completa UNA lineaActualId e
+    // inicia UNA lineaSiguienteId — no acepta una colección de líneas
+    // actuales. Con misEnServicio.length > 1 la simulación de este
+    // clasificador (que remueve TODAS mis líneas en_servicio) NO podría
+    // materializarse con esa mutación: quedarían líneas mías abiertas que el
+    // botón prometió cerrar. Por eso la continuidad solo se ofrece con
+    // exactamente una línea propia en curso; con varias se cae al batch
+    // (finalizarComponentesTicketNativoPorRef_) y Central decide el
+    // siguiente paso. NO se crea un batch+continue backend, ni loops de
+    // llamadas atómicas, ni finalizar-y-reclamar por separado.
+    //
+    // Orden TÉCNICO recibido de getTicketLineas (slot → creada → id): se
+    // conserva tal cual, se toma la primera compatible. No se ordena por
+    // fila física ni se inventa prioridad comercial.
+    // GAP_SECUENCIA_COMERCIAL_MULTIGRUPO permanece aislado: cuando hay
+    // varios grupos independientes no existe orden comercial demostrable,
+    // así que se usa únicamente este orden técnico.
+    const siguiente = (misEnServicio.length === 1)
+      ? (esperandoSinStaff.filter(function (l) {
+          return _authOk(l) && _puedeTomarlaConAreaP6B_(l, areaStaff);
+        })[0] || null)
+      : null;
+
+    if (siguiente) {
+      return _res('CONTINUAR_MISMA_STAFF', {
+        siguienteLinea: siguiente,
+        motivo: 'existe_siguiente_compatible_sin_staff'
+      });
+    }
+
+    // ── 7. Quedan pendientes que yo no puedo (o no debo) tomar ──────────
+    // Incluye el caso de línea preasignada a otra staff todavía esperando
+    // (hayOtraStaffPreasignada): cuenta como pendiente operativo real, no
+    // cae en fallback. NO se reasigna, NO se limpia su staff.
+    return _res('FINALIZAR_MI_PARTE_CON_PENDIENTES', {
+      motivo: base.hayOtraStaffPreasignada
+        ? 'pendiente_preasignada_a_otra_staff'
+        : 'pendiente_no_compatible_o_sin_continuidad'
+    });
+  }
+  window._clasificarEscenarioLineasCentral_ = _clasificarEscenarioLineasCentral_;
+
+  // ══════════════════════════════════════════════════════════════════════
+  // RENDERER DE ACCIONES — escenario → botones (semántica CENTRAL)
+  // ══════════════════════════════════════════════════════════════════════
+  // "Central" es el punto administrativo universal, NO una persona: la UX de
+  // staff nunca nombra a la administradora de turno ni promete "enviar a
+  // cobro" (esa decisión es de Central, y el backend la bloquearía igual
+  // mientras queden componentes pendientes).
+  const _LN_BTN_BASE_UX_ = 'margin-bottom:8px;width:100%;padding:14px;border:none;' +
+    'border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;' +
+    'cursor:pointer;color:white;';
+  const _LN_BTN_VERDE_UX_ = 'background:linear-gradient(135deg,#2d6a4f,#1a4a32);';
+  const _LN_BTN_INK_UX_   = 'background:var(--ink);';
+
+  function _btnLineasUX_(estiloFondo, onclick, texto) {
+    return '<button style="' + _LN_BTN_BASE_UX_ + estiloFondo + '" onclick="' + onclick + '">' +
+           texto + '</button>';
+  }
+  function _avisoLineasUX_(texto, esError) {
+    const color = esError ? 'var(--danger)' : 'var(--ink-faint)';
+    const borde = esError ? 'border:1px solid var(--danger);border-radius:10px;' : '';
+    return '<div style="text-align:center;color:' + color + ';font-size:12px;padding:12px;' + borde + '">' +
+           texto + '</div>';
+  }
+
+  function _renderAccionesTicketLineasCentral_(btnContainer, slot, d) {
+    if (!btnContainer || !d) return;
+    const esc = d.escenario;
+
+    // Finalizar mis componentes (batch nativo) — mismo handler para todos los
+    // escenarios de cierre: cambia el TEXTO, no la mutación.
+    const onFinalizarParte = '_finalizarParteLineas_(' + slot + ')';
+
+    if (esc === 'FINALIZAR_UNICO') {
+      btnContainer.innerHTML = _btnLineasUX_(_LN_BTN_VERDE_UX_, onFinalizarParte,
+        'Ya terminé — enviar a Central');
+      return;
+    }
+
+    if (esc === 'FINALIZAR_MIS_COMPONENTES_Y_CERRAR' || esc === 'FINALIZAR_ULTIMA_PARTE') {
+      btnContainer.innerHTML = _btnLineasUX_(_LN_BTN_VERDE_UX_, onFinalizarParte,
+        'Ya terminé la clienta — enviar a Central');
+      return;
+    }
+
+    if (esc === 'CONTINUAR_MISMA_STAFF') {
+      const sig = d.siguienteLinea || {};
+      const lbl = sig.servicio || sig.area || 'siguiente servicio';
+      const lidSig = String(sig.id || '').replace(/'/g, "\\'");
+      const lidAct = String((d.misLineaIds && d.misLineaIds[0]) || '').replace(/'/g, "\\'");
+      let html = '';
+      // Continuidad ATÓMICA: completa la actual e inicia la siguiente en una
+      // sola transacción backend (completarActualYContinuarLineaNativa).
+      html += _btnLineasUX_(_LN_BTN_INK_UX_,
+        "_continuarMismaStaffLineas_(" + slot + ",'" + lidAct + "','" + lidSig + "')",
+        'Ya terminé mi parte — continuar con ' + lbl);
+      // Alternativa: cerrar solo lo mío y dejar que Central decida quién sigue.
+      html += _btnLineasUX_(_LN_BTN_VERDE_UX_, onFinalizarParte,
+        'Ya terminé mi parte — enviar a Central para siguiente staff');
+      btnContainer.innerHTML = html;
+      return;
+    }
+
+    if (esc === 'FINALIZAR_MI_PARTE_CON_PENDIENTES') {
+      btnContainer.innerHTML = _btnLineasUX_(_LN_BTN_VERDE_UX_, onFinalizarParte,
+        'Ya terminé mi parte — enviar a Central para siguiente staff');
+      return;
+    }
+
+    if (esc === 'FINALIZAR_MI_PARTE_CON_OTRA_STAFF_EN_CURSO') {
+      btnContainer.innerHTML = _btnLineasUX_(_LN_BTN_VERDE_UX_, onFinalizarParte,
+        'Ya terminé mi parte — enviar a Central para seguimiento');
+      return;
+    }
+
+    if (esc === 'BLOQUEADO_AUTORIZACION') {
+      btnContainer.innerHTML = _avisoLineasUX_(
+        '⚠️ Este ticket tiene un servicio pendiente de autorización. ' +
+        'No se puede cerrar hasta que Central lo resuelva.', true);
+      return;
+    }
+
+    if (esc === 'BLOQUEADO_ESTADO_TECNICO') {
+      // GAP_PROPUESTA_INVISIBLE — no se afirma que sea autorización: solo se
+      // sabe que existen líneas omitidas del conjunto operativo visible.
+      btnContainer.innerHTML = _avisoLineasUX_(
+        '⚠️ Este ticket tiene componentes que no se pueden verificar desde acá. ' +
+        'Avisá a Central antes de cerrarlo.', true);
+      return;
+    }
+
+    // SIN_ACCION_VALIDA y cualquier escenario no contemplado → fail closed.
+    // Nunca "Finalizar servicio" ni caída a legacy.
+    btnContainer.innerHTML = _avisoLineasUX_('Sin acciones disponibles para vos en este momento.', false);
+  }
+  window._renderAccionesTicketLineasCentral_ = _renderAccionesTicketLineasCentral_;
 
   // Actualiza los botones de finalización según si hay promo multi-área activa
   function updateFinishButtons(slot) {
@@ -758,73 +1050,22 @@
           return;
         }
 
-        const staffNChk = _staffChk.trim().toLowerCase();
-        function _esMiaChk_(l)   { return String(l.staff || '').trim().toLowerCase() === staffNChk; }
-        function _esOtraChk_(l)  { const s = String(l.staff || '').trim(); return !!s && s.toLowerCase() !== staffNChk; }
-        function _esPromoChk_(l) {
-          // NUNCA !!l.esPromo — 'no' es string truthy. Campo canónico real
-          // (LX.esPromo en NexServ_Lineas.gs), no se infiere de promoRef/prefijo.
-          return ['si', 'sí', 'true', '1'].indexOf(String(l.esPromo || '').trim().toLowerCase()) >= 0;
-        }
+        // ── ORQUESTADOR: leer LINEAS → clasificar (puro) → renderizar ────
+        // updateFinishButtons deja de implementar la matriz de reglas por sí
+        // mismo. La decisión completa vive en _clasificarEscenarioLineasCentral_.
+        // GAP_PROPUESTA_INVISIBLE — señal defensiva mínima derivada del
+        // contrato existente; NO se pasa `r` completo al clasificador ni se
+        // parsea `avisos` (texto humano).
+        const _hayTecnicasChk = Number((r.conteos && r.conteos.tecnicas) || 0) > 0;
 
-        const lineasChk = r.lineasActivas;
-        const miasEnServicioChk    = lineasChk.filter(function (l) { return _esMiaChk_(l)  && l.estado === 'en_servicio'; });
-        const esperandoSinStaffChk = lineasChk.filter(function (l) { return !String(l.staff || '').trim() && l.estado === 'esperando'; });
-        const ajenasEnServicioChk  = lineasChk.filter(function (l) { return _esOtraChk_(l) && l.estado === 'en_servicio'; });
-        const ajenasEsperandoChk   = lineasChk.filter(function (l) { return _esOtraChk_(l) && l.estado === 'esperando'; });
+        const _decision = _clasificarEscenarioLineasCentral_({
+          lineas: r.lineasActivas,
+          staffActual: _staffChk,
+          areaStaff: (window.currentUser && window.currentUser.area) || '',
+          hayLineasTecnicasOmitidas: _hayTecnicasChk
+        });
 
-        // ── CASO 1 — regular único ──────────────────────────────────────
-        if (lineasChk.length === 1 && _esMiaChk_(lineasChk[0]) && lineasChk[0].estado === 'en_servicio' && !_esPromoChk_(lineasChk[0])) {
-          btnContainer.innerHTML = '<button class="btn-primary" style="margin-bottom:10px;background:var(--ink);color:white;font-size:14px;padding:16px;" onclick="prepararYFinalizar(' + _slotLineasChk + ')">Finalizar servicio</button>';
-          return;
-        }
-
-        // ── CASO 4 — otra staff ya trabajando una línea de este ticket ───
-        // Prioridad sobre CASO 3: nunca "yo sigo"/"pasar"/reapropiar
-        // mientras alguien más ya la tiene en curso, aunque además exista
-        // una línea esperandoSinStaff en paralelo. Nunca toca la línea ajena.
-        if (ajenasEnServicioChk.length > 0) {
-          btnContainer.innerHTML = '<button class="btn-primary" style="margin-bottom:10px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);font-size:14px;padding:16px;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">✅ Terminé mi parte</button>';
-          return;
-        }
-
-        // ── CASO 3 — hay una línea esperando sin staff ───────────────────
-        if (esperandoSinStaffChk.length > 0) {
-          // Orden AUTORITATIVO de getTicketLineas (slot → fecha de
-          // creación), nunca por catálogo PROMOS.
-          const siguienteChk = esperandoSinStaffChk[0];
-          const puedeChk = _puedeTomarlaP6B_(siguienteChk);
-          const lblChk = siguienteChk.servicio || siguienteChk.area || 'siguiente servicio';
-          const lineaIdChk = String(siguienteChk.id || '').replace(/'/g, "\\'");
-          let htmlChk = '';
-          if (puedeChk) {
-            htmlChk += '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--ink);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;" onclick="_yoSigoLineas_(' + _slotLineasChk + ",'" + lineaIdChk + "')\">Yo sigo — tomar ahora: " + lblChk + '</button>';
-            htmlChk += '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--accent);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">Pasar ' + lblChk + ' a otra staff (queda en espera)</button>';
-          }
-          // Texto corregido D7.1: NUNCA prometer "enviar a cobro" mientras
-          // queda una línea esperando — mandarTicketNativoACobroPorRef_ la
-          // bloquearía de todos modos (TICKET_COMPONENTES_PENDIENTES). Si
-          // "puede" ya mostró Yo sigo/Pasar, este es el 3er botón (imagen
-          // 3); si "no puede", es el ÚNICO botón — evita el par redundante
-          // "pasar"/"terminé mi parte" cuando ambos harían exactamente lo mismo.
-          htmlChk += '<button style="margin-bottom:8px;width:100%;padding:14px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">✅ Terminé mi parte — continuar con otra staff</button>';
-          btnContainer.innerHTML = htmlChk;
-          return;
-        }
-
-        // ── CASO 2 — multi/promo, todo lo operativo del ticket es mío ────
-        // ajenasEsperandoChk===0 evita prometer "a cobro" si queda una línea
-        // pre-asignada a otra staff que todavía no arrancó.
-        if (miasEnServicioChk.length > 0 && ajenasEsperandoChk.length === 0) {
-          btnContainer.innerHTML = '<button class="btn-primary" style="margin-bottom:10px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);font-size:14px;padding:16px;" onclick="_finalizarParteLineas_(' + _slotLineasChk + ')">✅ Terminé mi parte — clienta multi-servicio a cobro</button>';
-          return;
-        }
-
-        // ── Fallback defensivo — combinación no contemplada explícitamente
-        // por D7.1 (ej. lo único activo del ticket es una línea ajena
-        // todavía esperando y yo no tengo nada en_servicio). Fail closed,
-        // nunca "Finalizar servicio" ni legacy.
-        btnContainer.innerHTML = '<div style="text-align:center;color:var(--ink-faint);font-size:12px;padding:10px;">Sin acciones disponibles para vos en este momento.</div>';
+        _renderAccionesTicketLineasCentral_(btnContainer, _slotLineasChk, _decision);
       }).catch(function (e) {
         if (!_vigenteChk()) return;
         console.error('[updateFinishButtons][LINEAS]', e);
@@ -1249,7 +1490,14 @@
       return;
     }
 
-    if (typeof showToast === 'function') showToast('✅ Tu parte quedó completada. La clienta continúa con otra staff.');
+    // Toast NEUTRO: este handler sirve a los cinco escenarios de cierre del
+    // clasificador (FINALIZAR_UNICO, FINALIZAR_MIS_COMPONENTES_Y_CERRAR,
+    // FINALIZAR_ULTIMA_PARTE, FINALIZAR_MI_PARTE_CON_PENDIENTES y
+    // FINALIZAR_MI_PARTE_CON_OTRA_STAFF_EN_CURSO). "La clienta continúa con
+    // otra staff" solo era cierto en dos de ellos, así que se usa un texto
+    // válido para todos. No se pasa el escenario al handler ni se agrega
+    // estado global solo para personalizar el mensaje.
+    if (typeof showToast === 'function') showToast('✅ Tu parte quedó completada. Central continuará con el ticket.');
     window['_as' + slot + 'FuenteCanonica'] = null; // D7.1 — neutraliza; loadStaffHome no reescribe FuenteCanonica, un refresh real la restaura desde a.fuenteReal
     window['_as' + slot + 'FuenteLineas'] = false; // espejo de compatibilidad — esta atención de este slot ya terminó
     // Refresco completo del panel de staff — evita reimplementar el reset
@@ -1259,10 +1507,70 @@
   }
   window._finalizarParteLineas_ = _finalizarParteLineas_;
 
-  // Handler del botón "Yo sigo — tomar ahora: X" LINEAS (updateFinishButtons,
-  // CASO 3A). D7.1 P6-B FASE 4. Manda SOLO ticketRef+lineaId — NUNCA staff
-  // (identidad la inyecta el backend desde la sesión firmada, ver
-  // lineaService.js/asignarYIniciarLinea y el case en NexServ_AppsScript.js).
+  // ── Handler del botón "Ya terminé mi parte — continuar con X" ──────────
+  // Escenario CONTINUAR_MISMA_STAFF del clasificador universal.
+  //
+  // CORRECCIÓN DE WIRING: la versión anterior de este flujo usaba
+  // LineaService.asignarYIniciarLinea(), que SOLO reclama e inicia la
+  // siguiente línea — dejaba la actual en_servicio, así que la staff quedaba
+  // con dos líneas abiertas y la transición no era atómica. Ahora se usa la
+  // primitiva atómica completarActualYContinuarLineaNativa: en una sola
+  // transacción backend (un único ScriptLock, con verificación por relectura
+  // y compensación conjunta LINEAS+TicketsFuente) completa la línea actual e
+  // inicia la siguiente. Nunca existe el estado observable
+  // "actual=completado, siguiente=esperando".
+  //
+  // Manda SOLO ticketRef + lineaActualId + lineaSiguienteId — NUNCA staff:
+  // la identidad la inyecta el backend desde la sesión firmada
+  // (exigirSesionFirmada_ en el case del router). Si el frontend mandara
+  // staff igual, el backend lo ignora.
+  window._continuarMismaStaffEnCurso_ = window._continuarMismaStaffEnCurso_ || {};
+  async function _continuarMismaStaffLineas_(slot, lineaActualId, lineaSiguienteId) {
+    if (window._continuarMismaStaffEnCurso_[slot]) return; // anti doble-toque
+    const ticketRef = slot === 2 ? (window._as2IdEspera || '') : (window._as1IdEspera || '');
+    const lidAct = String(lineaActualId || '').trim();
+    const lidSig = String(lineaSiguienteId || '').trim();
+    if (!ticketRef || !lidAct || !lidSig) {
+      alert('⚠️ Error interno: datos de las líneas perdidos.');
+      return;
+    }
+
+    window._continuarMismaStaffEnCurso_[slot] = true;
+    const btnContainer = document.getElementById('as' + slot + 'FinishBtns');
+    if (btnContainer) btnContainer.innerHTML = '<button class="btn-primary" disabled style="margin-bottom:10px;opacity:0.6;">Procesando...</button>';
+
+    let r;
+    try {
+      r = await LineaService.completarActualYContinuar(ticketRef, lidAct, lidSig);
+    } catch (e) {
+      r = { success: false, error: 'ERROR_RED', message: String(e) };
+    }
+    window._continuarMismaStaffEnCurso_[slot] = false;
+
+    if (!r || r.success !== true) {
+      alert((r && (r.message || r.error)) || 'No se pudo continuar con el siguiente servicio. Intentá de nuevo.');
+      try { updateFinishButtons(slot); } catch (e) {}
+      return;
+    }
+
+    if (typeof showToast === 'function') showToast('✅ Servicio anterior completado. Continuás con el siguiente.');
+    // Reconstrucción del slot SIEMPRE desde líneas reales (instrucción D7.1):
+    // no se agrega nada a slotServices a mano.
+    if (typeof loadStaffHome === 'function') { try { await loadStaffHome(); } catch (e) {} }
+    else { try { updateFinishButtons(slot); } catch (e) {} }
+  }
+  window._continuarMismaStaffLineas_ = _continuarMismaStaffLineas_;
+
+  // Handler del botón "Yo sigo — tomar ahora: X" LINEAS. D7.1 P6-B FASE 4.
+  // Manda SOLO ticketRef+lineaId — NUNCA staff (identidad la inyecta el
+  // backend desde la sesión firmada).
+  //
+  // NOTA: el clasificador universal (_clasificarEscenarioLineasCentral_) ya
+  // NO enruta hacia acá: la continuidad de la misma staff pasa por
+  // _continuarMismaStaffLineas_ (transición atómica). Esta función se
+  // conserva sin cambios porque sigue siendo la primitiva correcta para
+  // "reclamar una línea huérfana SIN finalizar la actual" — un caso distinto,
+  // hoy sin punto de entrada en la rama LINEAS.
   window._yoSigoLineasEnCurso_ = window._yoSigoLineasEnCurso_ || {};
   async function _yoSigoLineas_(slot, lineaId) {
     if (window._yoSigoLineasEnCurso_[slot]) return; // anti doble-toque
@@ -6196,3 +6504,4 @@ window._lineasLineasAAreasModal = _lineasLineasAAreasModal;
 window.cobrarPromoCompleta = cobrarPromoCompleta;
 window.finishAndContinueSameStaff = finishAndContinueSameStaff;
 window.compartirSiguienteServicio = compartirSiguienteServicio;
+
