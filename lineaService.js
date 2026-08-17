@@ -106,6 +106,12 @@
     // payload para multi (2+ áreas): { codigo, nombre, prioridad, observaciones, areas:[{area,tipo,tentativo,precio,...}], secuencia:[...], [asignadaA] }
     // Devuelve: Promise → { success, id, ... }
     // ----------------------------------------------------------
+    // AM-1P — el payload puede transportar opcionalmente el contexto de
+    // ESTANCIA (`baseTicketRef` y/o `visita`). Se envía tal cual: no se
+    // inventa, no se completa, no se vuelve obligatorio. Una creación inicial
+    // sigue funcionando sin ellos (callers existentes intactos). El backend es
+    // la autoridad: valida `visita` contra las líneas del `baseTicketRef` y
+    // falla cerrado ante mismatch — el frontend solo aporta contexto.
     crearServicio: function(payload) {
       var esMulti = payload && Array.isArray(payload.areas) && payload.areas.length > 1;
       var esPromo = !esMulti && !!(payload && payload.promoNombre);
