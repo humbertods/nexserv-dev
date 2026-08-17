@@ -1657,7 +1657,14 @@
         area: areaRest,
         precio: precioRest,
         prioridad: 'Normal',
-        observaciones: 'Continuación de ticket — ' + (user?.name || '') + ' terminó su parte'
+        observaciones: 'Continuación de ticket — ' + (user?.name || '') + ' terminó su parte',
+        // AM-1P (GAP_PROPAGACION_FINISH_PARTIAL) — el SN de continuación
+        // pertenece a la MISMA estancia que el ticket padre. Se manda el ref
+        // padre (ya resuelto arriba por ensureIdEsperaFresco) como
+        // baseTicketRef; el backend lee de él la visita persistida y la copia.
+        // NO se resuelve la estancia por codigo/fecha: eso fusionaría dos
+        // atenciones distintas de la misma clienta el mismo día.
+        baseTicketRef: idEspera
       });
 
       // 3. Limpiar slot
@@ -6504,4 +6511,3 @@ window._lineasLineasAAreasModal = _lineasLineasAAreasModal;
 window.cobrarPromoCompleta = cobrarPromoCompleta;
 window.finishAndContinueSameStaff = finishAndContinueSameStaff;
 window.compartirSiguienteServicio = compartirSiguienteServicio;
-
