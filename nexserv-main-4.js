@@ -484,6 +484,7 @@
     'Lesly':  { key: 'lesly',  area: 'Cejas · Depilacion · Lifting' },
     'Keyla':  { key: 'keyla',  area: 'Cejas · Depilacion · Lifting' },
     'Rosa':   { key: 'rosa',   area: 'Cejas · Depilacion · Lifting' },
+    'Melany': { key: 'melany', area: 'Cejas · Depilacion · Lifting' },
     'Yadira': { key: 'yadira', area: 'Pestanas' },
     'Diana':  { key: 'diana',  area: 'Pestanas' },
     'Laura':  { key: 'laura',  area: 'Facial' },
@@ -562,12 +563,12 @@
   }
   window.iniciarClientaStaff = iniciarClientaStaff;
 
-  async function reasignarStaff(idEspera, areaIdx, selId, nombre, codigo){
+  async function reasignarStaff(idEspera, areaIdx, selId, nombre, codigo, lineaId){
     const sel = document.getElementById(selId);
     const chica = sel ? sel.value : '';
     if (!chica) { alert('Elegí una staff'); return; }
     try {
-      const r = await apiPost('asignarStaff', { idEspera: idEspera, areaIdx: areaIdx || '', chicaNombre: chica });
+      const r = await apiPost('asignarStaff', { idEspera: idEspera, areaIdx: areaIdx || '', chicaNombre: chica, lineaId: String(lineaId || '') });
       if (r && r.success) {
         if (typeof showToast === 'function') showToast('✓ ' + (nombre||'Clienta') + ' reasignada a ' + chica);
         // Notificar SOLO a la staff asignada (no a toda el área)
@@ -2750,6 +2751,7 @@
       { name: 'Keyla',  area: 'Cejas',    areas: ['cejas', 'depilacion', 'retiro_lifting'] },
       { name: 'Lesly',  area: 'Cejas',    areas: ['cejas', 'depilacion', 'retiro_lifting'] },
       { name: 'Rosa',   area: 'Cejas',    areas: ['cejas', 'depilacion', 'retiro_lifting'] },
+      { name: 'Melany', area: 'Cejas',    areas: ['cejas', 'depilacion', 'retiro_lifting'] },
       { name: 'Yadira', area: 'Pestañas', areas: ['pestanas'] },
       { name: 'Diana',  area: 'Pestañas', areas: ['pestanas'] },
       { name: 'Laura',  area: 'Facial',   areas: ['facial'] }
@@ -3123,7 +3125,53 @@
       document.getElementById('vdNombreExistente').value = '';
       document.getElementById('vdClienteSuggestions').style.display = 'none';
       document.getElementById('vdFormaPago').value = '';
+      _vdLimpiarTransfer();
     }
+  }
+
+  // ── PRE-CONFIRMACIÓN DE TRANSFERENCIA (venta directa) ────────────────────
+  // Mismo contrato que el cobro de servicios. Al salir de Transferencia se
+  // LIMPIAN los tres campos, no solo se ocultan: nunca se envía metadata
+  // bancaria de un método que ya no está seleccionado.
+  function _vdLimpiarTransfer() {
+    ['vdTransferResponsable', 'vdTransferBanco', 'vdTransferCodigo'].forEach(function (id) {
+      const e = document.getElementById(id); if (e) e.value = '';
+    });
+    const p = document.getElementById('vdTransferPanel');
+    if (p) p.style.display = 'none';
+  }
+
+  function vdOnFormaPagoChange() {
+    const metodo = (document.getElementById('vdFormaPago') || {}).value || '';
+    const panel = document.getElementById('vdTransferPanel');
+    if (!panel) return;
+    if (metodo === 'Transferencia') {
+      panel.style.display = 'block';
+      setTimeout(function () {
+        const r = document.getElementById('vdTransferResponsable'); if (r) r.focus();
+      }, 60);
+    } else {
+      _vdLimpiarTransfer();
+    }
+  }
+  window.vdOnFormaPagoChange = vdOnFormaPagoChange;
+
+  // Devuelve { ok, error, transferencias } con los TRES datos obligatorios.
+  // componente_index 0: la venta directa es siempre un pago simple.
+  function _vdRecolectarTransferencias(formaPago) {
+    if (formaPago !== 'Transferencia') return { ok: true, transferencias: [] };
+    const v = function (id) {
+      const e = document.getElementById(id);
+      return e ? String(e.value || '').trim() : '';
+    };
+    const responsable = v('vdTransferResponsable');
+    const banco = v('vdTransferBanco');
+    const codigo = v('vdTransferCodigo');
+    if (!responsable) return { ok: false, error: 'Falta el RESPONSABLE de la transferencia.' };
+    if (!banco)       return { ok: false, error: 'Falta el BANCO de la transferencia.' };
+    if (!codigo)      return { ok: false, error: 'Falta el No. DE CONFIRMACIÓN de la transferencia.' };
+    return { ok: true, transferencias: [{ componente_index: 0, monto: 0,
+             responsable: responsable, banco: banco, codigo_confirmacion: codigo }] };
   }
 
   function vdOnTipoClienteChange() {
@@ -3233,9 +3281,29 @@
     if (!formaPago) { showToast('⚠ Seleccioná la forma de pago'); return; }
     const total = lineasValidas.reduce((s, l) => s + (l.precio * (l.cantidad || 1)), 0);
     const productos = lineasValidas.map(l => ({ nombre: l.producto, precio: l.precio, cantidad: l.cantidad || 1, subtotal: l.precio * (l.cantidad || 1) }));
-    descontarStockVenta(productos);
+
+    // Pre-confirmación de transferencia ANTES de tocar nada. El backend
+    // (_validarTransferenciasCobro_) exige los tres datos y rechaza la venta
+    // sin ellos; validar acá evita el viaje y da un mensaje claro.
+    const _vtr = _vdRecolectarTransferencias(formaPago);
+    if (!_vtr.ok) { showToast('⚠ ' + _vtr.error); return; }
+
+    // FIX: antes se descontaba el stock ANTES del POST y no se comprobaba
+    // r.success. Si el backend rechazaba (p. ej. transferencia sin banco), el
+    // inventario ya había bajado y se mostraba "✓ Venta registrada" igual.
+    // Ahora: primero se confirma la escritura, y solo después se descuenta.
     try {
-      await apiPost('registrarVentaProductos', { idEspera: '', clienteNombre: nombreCliente, productos, total, esVentaDirecta: true, metodoPago: formaPago });
+      const r = await apiPost('registrarVentaProductos', {
+        idEspera: '', clienteNombre: nombreCliente, productos, total,
+        esVentaDirecta: true, metodoPago: formaPago,
+        transferencias: _vtr.transferencias
+      });
+      if (!r || r.success === false) {
+        const msg = (r && (r.error || r.message)) || 'No se pudo registrar la venta.';
+        showToast('⚠ ' + msg);
+        return;                       // sin descuento de stock, sin falso éxito
+      }
+      descontarStockVenta(productos);
       showToast('✓ Venta registrada — $' + total.toFixed(2) + ' · ' + formaPago);
       toggleVentaDirecta();
       window._vdLineas = [{ producto: '', precio: 0, cantidad: 1 }];
@@ -3795,6 +3863,33 @@
         + '</div>'
         + '<button onclick="openRegistrarVisitaFacialFromPanel()" style="width:100%;padding:10px;background:var(--bg-card);border:1.5px solid var(--line);border-radius:var(--radius-pill);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;color:var(--ink-soft);">Saltar ficha — solo registrar visita</button>';
     }
+
+    // ── EVIDENCIAS-CORE · acceso a "Evidencias de visita" (área facial) ──────
+    // Se agrega DESPUÉS de la Ficha facial, en ambas ramas (con y sin ficha),
+    // y no altera nada del bloque anterior. El contexto sale de variables de
+    // estado que ya fija el flujo de atención, nunca del DOM:
+    //   codigo/nombre  → window._currentFacialClient*   (de la atención)
+    //   servicio       → window._currentFacialSvcName   (de slotServices)
+    //   ticket_ref     → window._as1IdEspera/_as2IdEspera (LE-/SP-/TM-/SN-)
+    //   linea_id       → '' : no existe ninguna referencia LINEAS en frontend.
+    el.innerHTML += '<div id="evFacialAcc' + slot + '"></div>';
+    try {
+      if (window.EvidenciasCore && typeof EvidenciasCore.montarAcordeonFacial === 'function') {
+        EvidenciasCore.montarAcordeonFacial('evFacialAcc' + slot, {
+          codigo:     window._currentFacialClientCodigo || (client && client.code) || '',
+          nombre:     window._currentFacialClientNombre || (client && client.name) || '',
+          servicio:   window._currentFacialSvcName || '',
+          ticket_ref: (slot === 2 ? (window._as2IdEspera || '') : (window._as1IdEspera || '')),
+          linea_id:   '',
+          staff:      (window.currentUser && window.currentUser.name) || '',
+          readonly:   false,
+          // La ATENCIÓN asegura la visita: la staff no la crea a mano ni
+          // escribe servicio/fecha. Por eso autoEnsure sí y allowCreate no.
+          autoEnsure:  true,
+          allowCreate: false
+        });
+      }
+    } catch (eEv) { console.warn('[EvidenciasCore] facial staff:', eEv); }
   }
 
   function openNuevaFichaFacialFromPanel(clientKey, slot) {
