@@ -105,8 +105,18 @@
     // ── Si es cejas pigmento: mostrar ficha rápida de efecto polvo ──
     const slot_cs = window._confirmSvcSlot || 1;
     const svcs_cs = slotServices[slot_cs] || [];
-    const tienePigmento = svcs_cs.some(function(s) { return esSrvPigmento(s.name); });
-    if (tienePigmento && user && String(user.area||'').toLowerCase().includes('ceja')) {
+    // INC-PROMO-FICHA-CEJAS-PERMANENTES · decisor único (nexserv-main-1.js).
+    // Antes se evaluaba slotServices[].name, que en la rama promo trae el nombre
+    // genérico del combo ("Combo 4 EP") y nunca daba true. El helper resuelve los
+    // componentes reales y ya incluye el gate de user.area = cejas.
+    const tienePigmento = (typeof _ticketTienePigmentoParaStaffActual === 'function')
+      ? _ticketTienePigmentoParaStaffActual({
+          user: user,
+          promoFull: window._assignedPromo ? window._assignedPromo[slot_cs] : null,
+          slotServices: svcs_cs
+        })
+      : false;
+    if (tienePigmento) {
       const clientCodigo_cs = slot_cs === 1 ? (window._as1Client || '') : (window._as2Client || '');
       const clientNombre_cs = document.getElementById('as' + slot_cs + 'Name')?.textContent?.replace(' ⭐','') || '';
       const clientKey_cs = clientCodigo_cs.toLowerCase().replace(/-/g,'');
@@ -423,10 +433,7 @@
     }
 
     // 2) Agregar desglose acumulado en memoria (partes de enganche anteriores parseadas de obs)
-    // D7.1 Objetivo 4 — leer del store POR SLOT, no del global _desgloseAcumulado
-    // compartido (ese global es el que se pisaba entre slot1/slot2 cuando
-    // ambos atravesaban un enganche en paralelo — hallazgo D7 Hallazgo 4).
-    ((window._desgloseAcumuladoPorSlot && window._desgloseAcumuladoPorSlot[slot]) || []).forEach(d => {
+    (window._desgloseAcumulado || []).forEach(d => {
       const yaExiste = desgloseAcumulado.some(ex => ex.staff === d.staff && ex.servicio === d.servicio);
       if (!yaExiste) desgloseAcumulado.push(d);
     });
@@ -494,9 +501,7 @@
       window._as1Client = '';
     }
     window._finishingData = null;
-    // D7.1 Objetivo 4 — limpiar el store por-slot (fuente operativa real).
-    if (window._desgloseAcumuladoPorSlot) window._desgloseAcumuladoPorSlot[slot] = [];
-    window._desgloseAcumulado = []; // espejo de compatibilidad, no operativo
+    window._desgloseAcumulado = [];
     slotServices[slot] = [];
     if (user && activeClients[user.name]) {
       activeClients[user.name] = (activeClients[user.name] || []).filter((_, i) => i !== slot - 1);
@@ -1688,12 +1693,7 @@
     }));
 
     // Leer desglose previo del sheet si es ticket SP- (áreas anteriores ya registradas)
-    // D7.1 Objetivo 4B — fuente operativa EXCLUSIVA del slot 2. Antes esto
-    // leía window._desgloseAcumulado (global compartido), lo que permitía que
-    // el desglose del slot 1 contaminara el envío a cobro del slot 2 en doble
-    // atención. Mismo patrón ya aplicado en finishAndSend_ (Objetivo 4).
-    // El global queda solo como espejo legacy, nunca como fuente operativa acá.
-    let desgloseDelSheet2 = (window._desgloseAcumuladoPorSlot && window._desgloseAcumuladoPorSlot[2]) || [];
+    let desgloseDelSheet2 = window._desgloseAcumulado || [];
     const idEspera2 = window._as2IdEspera || '';
     const esTicketSP2 = idEspera2.startsWith('SP-');
     if (esTicketSP2 && desgloseDelSheet2.length === 0) {
@@ -1755,11 +1755,7 @@
     }
     console.info('[finishSlot2]', window._as2Client || '(sin código)', clientName, idEspera2, 'confirmada', _finResp2);
 
-    // D7.1 Objetivo 4B — limpiar EXCLUSIVAMENTE el store del slot 2. El
-    // store del slot 1 (_desgloseAcumuladoPorSlot[1]) NUNCA se toca acá:
-    // el slot 1 puede tener una atención viva en curso.
-    if (window._desgloseAcumuladoPorSlot) window._desgloseAcumuladoPorSlot[2] = [];
-    window._desgloseAcumulado = []; // espejo de compatibilidad, no operativo
+    window._desgloseAcumulado = [];
 
     if (promoData) delete activePromos[normalizeClientKey(clientName)];
 
@@ -1772,216 +1768,6 @@
   }
 
   // === RETIRO GRATIS / $10 ===
-
-  // ── D7.1 P5 — Capa compartida LECTURA / RENDER-CÁLCULO para "Por empezar"
-  // + contadores de staffHome. Usada por loadStaffHome() (carga completa) y
-  // por refrescarAsignacionesStaff() (refresco liviano, ver router.js). ──
-
-  // LECTURA — una sola llamada de red (getTableroLineas vía LineaService).
-  // Contrato: si falla, PROPAGA el error (no lo convierte en []). El caller
-  // decide qué hacer con la UI ante el fallo — loadStaffHome() y
-  // refrescarAsignacionesStaff() lo manejan cada uno con su propio contrato
-  // de error (ver más abajo).
-  async function _obtenerAsignacionesStaff_() {
-    return await LineaService.obtenerListaEspera();
-  }
-
-  // RENDER — "Por empezar": mismo filtro y mismo HTML que existían antes
-  // en loadStaffHome() (sin cambios de comportamiento). No hace red.
-  // ── D2 · Predicado puro compartido — "línea LINEAS asignada a mí, pendiente" ──
-  // Único criterio de verdad para "Por empezar" (render) y el contador
-  // (pendingStat/navBadge). Contrato sobre LÍNEA CRUDA de getTableroLineas:
-  //   estado === 'esperando'  &&  staff !== ''  &&  staff === userName
-  // El campo de asignación real es w.staff (LX.staff) — NO w.asignadaA/w.tomadaPor
-  // (que no existen en la línea cruda). Líneas huérfanas (staff==='') no cuentan
-  // para nadie (R-D2.2). userNameLower debe venir ya en minúsculas/trim.
-  function _esMiaLineaPorEmpezar_(w, userNameLower) {
-    // ── PREREQ-A2 (GATE 0 remediación) — Home paralelo "Por empezar" debe
-    // quedar exclusivamente para fuente NO-LINEAS. Para fuente LINEAS la
-    // única entrada operativa es Lista de espera → modal canónico. Se lee
-    // ÚNICAMENTE w.fuente (campo real de getTableroLineas) — nunca se infiere
-    // por prefijo SN/SP/TM/LE, ticketRef, presencia de lineaId ni
-    // serviciosDetalle. Fuente vacía o distinta de LINEAS conserva EXACTAMENTE
-    // la lógica anterior (no se inventa fallback ni se convierte '' en LINEAS).
-    const fuente = String((w && w.fuente) || '').trim().toUpperCase();
-    if (fuente === 'LINEAS') return false;
-    const est = String((w && (w.estado || w.status)) || '').toLowerCase().replace('_', ' ');
-    if (est !== 'esperando') return false;
-    const s = String((w && w.staff) || '').trim();
-    if (!s) return false;
-    return s.toLowerCase() === userNameLower;
-  }
-
-  function _renderPorEmpezarDesdeListaEspera_(lista, user) {
-    const _peSection = document.getElementById('staffPorEmpezarSection');
-    const _peList    = document.getElementById('staffPorEmpezarList');
-    if (!_peSection || !_peList) return;
-
-    // ── D2 · PASO 1+2 — Aislamiento EN ORIGEN (R-D2.1 / R-D2.2) ──────────────
-    // Mismo predicado puro que usa el contador — sin criterio duplicado.
-    const _userName = String((user && user.name) || '').trim().toLowerCase();
-    const _mias = (lista || []).filter(function (w) {
-      return _esMiaLineaPorEmpezar_(w, _userName);
-    });
-
-    // ── D2-F2 — Guard de ticketRef ausente (fuente LINEAS) ───────────────────
-    // Una línea asignada a mí pero SIN ticketRef no puede tomarse: el adaptador
-    // exige grupo.ticketRef y fallaría al pulsar. No se renderiza como tomable;
-    // se avisa por consola con id/código/staff. Cero backend, sin inventar
-    // identidad por código/clienta/id.
-    const _miasTomables = [];
-    _mias.forEach(function (w) {
-      const ref = String((w && w.ticketRef) || '').trim();
-      if (!ref) {
-        console.warn('[PorEmpezar] línea LINEAS sin ticketRef — no tomable',
-          { id: (w && w.id) || '', codigo: (w && w.codigo) || '', staff: (w && w.staff) || '' });
-        return;
-      }
-      _miasTomables.push(w);
-    });
-
-    // ── D2 · PASO 3 — Agrupar las líneas mías por ticketRef (R-D2.3) ─────────
-    // Una tarjeta por ticket. Dos líneas de la misma staff en el mismo ticket →
-    // una sola tarjeta con N componentes. Dos ticketRef distintos (aunque misma
-    // clienta) → dos tarjetas, nunca se fusionan por código/clienta.
-    const _orden = [];
-    const _porRef = Object.create(null);
-    _miasTomables.forEach(function (w) {
-      const ref = String(w.ticketRef || '').trim();  // garantizado no vacío (guard D2-F2)
-      const key = ref;
-      if (!_porRef[key]) {
-        _porRef[key] = {
-          ticketRef: ref,
-          nombre: String(w.cliente || '').trim(),   // alias cliente→nombre
-          codigo: String(w.codigo || '').trim(),
-          total: 0,                                  // alias Σmonto→total
-          componentes: []
-        };
-        _orden.push(key);
-      }
-      const g = _porRef[key];
-      g.total += Number(w.monto || 0);
-      if (!g.nombre && w.cliente) g.nombre = String(w.cliente).trim();
-      g.componentes.push({
-        id: String(w.id || '').trim(),               // alias id→lineaId
-        servicio: String(w.servicio || '').trim(),
-        area: String(w.area || '').trim(),
-        monto: Number(w.monto || 0),
-        staff: String(w.staff || '').trim(),
-        estado: String(w.estado || '').trim()
-      });
-    });
-    const _grupos = _orden.map(function (k) { return _porRef[k]; });
-
-    if (_grupos.length > 0) {
-      _peSection.style.display = 'block';
-      window._porEmpezarGrupos = _porEmpezarGrupos_index(_grupos);  // índice para el onclick
-      _peList.innerHTML = _grupos.map(function (g, gi) {
-        const _nom = String(g.nombre || g.codigo || 'Clienta');
-        const _tot = Number(g.total || 0);
-        const _nComp = g.componentes.length;
-        const _svcResumen = _nComp === 1
-          ? String(g.componentes[0].servicio || 'Servicio')
-          : (_nComp + ' servicios · ' + g.componentes.map(function(c){ return c.servicio; }).join(' + '));
-        return '<div class="card" style="padding:14px;margin-bottom:8px;border:2px solid var(--top-purple,#8b5cf6);">'
-          + '<div style="font-weight:800;font-size:15px;">' + _escHtmlPE_(_nom) + '</div>'
-          + '<div style="font-size:12px;color:var(--ink-soft);margin:4px 0 10px;">' + _escHtmlPE_(_svcResumen) + (_tot ? ' · $' + _tot : '') + '</div>'
-          + '<button onclick="_tomarGrupoPorEmpezar_(' + gi + ')" '
-          + 'style="width:100%;padding:12px;background:var(--top-purple,#8b5cf6);color:#fff;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">▶ Tomar clienta</button>'
-          + '</div>';
-      }).join('');
-    } else {
-      _peSection.style.display = 'none';
-      _peList.innerHTML = '';
-      window._porEmpezarGrupos = null;
-    }
-  }
-
-  // Guarda el índice de grupos renderizados para que el onclick recupere el
-  // grupo EXACTO (con sus componentes ya filtrados a la staff actual) sin
-  // reconstruir nada desde el DOM.
-  function _porEmpezarGrupos_index(grupos) { return grupos; }
-
-  // Entrada al modal LINEAS existente desde "Por empezar". Recupera el grupo
-  // por índice y delega en el adaptador (main-1) que reproduce el contrato de
-  // openTake. CERO backend acá — la toma real ocurre al pulsar "Confirmar
-  // servicio" dentro del modal (tomarClienta → iniciarComponentesTicketNativoPorRef_).
-  function _tomarGrupoPorEmpezar_(gi) {
-    const grupos = window._porEmpezarGrupos;
-    if (!Array.isArray(grupos) || !grupos[gi]) {
-      alert('⚠️ No se encontró la clienta. Actualizá e intentá de nuevo.');
-      return;
-    }
-    if (typeof window.abrirModalTomaLineasPorEmpezar === 'function') {
-      window.abrirModalTomaLineasPorEmpezar(grupos[gi]);
-    } else {
-      alert('⚠️ No se pudo abrir la confirmación. Avisá a soporte.');
-    }
-  }
-  window._tomarGrupoPorEmpezar_ = _tomarGrupoPorEmpezar_;
-
-  function _escHtmlPE_(s) {
-    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
-
-  // CÁLCULO/RENDER — contadores que pertenecen realmente a staffHome
-  // (navBadge, navBadge2, pendingStat/"Espera"). Mismo filtro que existía
-  // antes en loadStaffHome(). NO toca waitCountMy/waitCountAll — esos son
-  // de la pantalla waitList y los actualiza renderWaitList(), no esta capa.
-  // No hace red.
-  function _actualizarContadoresStaffDesdeLista_(lista, user) {
-    // ── D2-F1 — misma fuente que el render: w.staff sobre líneas crudas LINEAS ──
-    // Antes usaba w.asignadaA/w.tomadaPor (inexistentes en la línea cruda de
-    // getTableroLineas) → contaba 0. Ahora usa el MISMO predicado puro que
-    // "Por empezar" (_esMiaLineaPorEmpezar_): estado esperando + staff===yo.
-    // SEMÁNTICA HISTÓRICA PRESERVADA: cuenta LÍNEAS/COMPONENTES pendientes
-    // (una por elemento del array, sin agrupar por ticketRef). Un ticket con 2
-    // líneas mías cuenta 2 aquí, aunque el render muestre 1 sola tarjeta.
-    const _userName = String((user && user.name) || '').trim().toLowerCase();
-    const myCount = (lista || []).filter(function (w) {
-      return _esMiaLineaPorEmpezar_(w, _userName);
-    }).length;
-    var _nb = document.getElementById('navBadge'); if (_nb) _nb.textContent = myCount;
-    var _nb2 = document.getElementById('navBadge2'); if (_nb2) _nb2.textContent = myCount;
-    var _ps = document.getElementById('pendingStat'); if (_ps) { var _psv = _ps.querySelector('.value'); if (_psv) _psv.textContent = myCount; }
-  }
-
-  // ── D7.1 P5 — Refresco liviano de "Por empezar" + contadores mientras
-  // staffHome está abierto (ver router.js, intervalo de 4000ms) o después
-  // de un tomarClienta con respuesta ambigua (ver confirmTake_() en
-  // nexserv-main-1.js). Contrato: 1 sola llamada de red por ejecución
-  // (0 getAtenciones, 0 getListaEspera legacy, 0 getFichaPestanas,
-  // 0 obtenerServiciosHoy, 0 POST). Ante fallo de getTableroLineas: la UI
-  // anterior se conserva tal cual (NO se borra "Por empezar", NO se pone el
-  // contador en 0) — LINEAS no degrada silenciosamente a legacy acá. No
-  // navega de pantalla, no cierra modales, no toca slotServices/activePromos. ──
-  async function refrescarAsignacionesStaff() {
-    const user = window.currentUser;
-    if (!user || user.role !== 'staff') return;
-
-    if (window._staffAssignmentsRefreshPromise) {
-      return window._staffAssignmentsRefreshPromise;
-    }
-
-    window._staffAssignmentsRefreshPromise = (async function () {
-      try {
-        const lista = await _obtenerAsignacionesStaff_();
-        _renderPorEmpezarDesdeListaEspera_(lista, user);
-        _actualizarContadoresStaffDesdeLista_(lista, user);
-      } catch (e) {
-        // getTableroLineas falló: se conserva la UI anterior como último
-        // estado conocido. Sin fallback a legacy — contrato de LineaService.
-        console.warn('[refrescarAsignacionesStaff]', e);
-      }
-    })();
-
-    try {
-      return await window._staffAssignmentsRefreshPromise;
-    } finally {
-      window._staffAssignmentsRefreshPromise = null;
-    }
-  }
-  window.refrescarAsignacionesStaff = refrescarAsignacionesStaff;
 
   async function loadStaffHome() {
     // Guard: si SIRA o Comisiones están activos, el DOM de staffHome fue reemplazado
@@ -2005,22 +1791,26 @@
       // Guard tardío: verificar que el DOM sigue siendo el de staffHome (no fue reemplazado por SIRA)
       if (!section || !list) return;
 
-      // ── POR EMPEZAR (Espera por staff) ─────────────────────────────────────
-      // Clientas asignadas a esta staff que todavía están 'esperando' en LINEAS.
-      // La staff toca "Confirmar / Empezar" → iniciarServicioStaff → 'en_servicio'.
-      // D7.1 P5 — lectura compartida con el bloque "Actualizar contadores" de
-      // más abajo (antes eran 2 llamadas a obtenerListaEspera(), ahora 1).
-      // Mismo contrato de error que antes: falla → _listaEsperaLSH queda en
-      // null → este bloque renderiza como lista vacía (comportamiento
-      // idéntico al catch(()=>[]) previo).
-      let _listaEsperaLSH = null;
-      try {
-        _listaEsperaLSH = await _obtenerAsignacionesStaff_();
-      } catch (eLSH) {
-        _listaEsperaLSH = null;
+      // ── INC-STAFFHOME-QUITAR-POR-EMPEZAR ───────────────────────────────────
+      // Regla de negocio: una clienta asignada por Mikaela NO se muestra como
+      // tarjeta accionable en staffHome. Se toma únicamente desde LISTA DE
+      // ESPERA. Por eso se retiró el render de "Por empezar" y su botón
+      // "Confirmar / Empezar" (el caller de iniciarClientaStaff desde esta
+      // pantalla). La función global sigue existiendo en nexserv-main-4.js;
+      // acá solo se retira su invocación.
+      //
+      // La LECTURA de cola se conserva: alimenta badges, contadores y estado
+      // interno más abajo (window._staffQueueState). No es UI accionable.
+      if (typeof refreshStaffQueue === 'function') {
+        try { await refreshStaffQueue('staffHome'); } catch (eRQ) { console.warn('[staffHome cola]', eRQ); }
       }
+      // El contenedor es HTML global de index.html: no se elimina, se deja
+      // explícitamente vacío y oculto para que el espacio desaparezca del todo.
       try {
-        _renderPorEmpezarDesdeListaEspera_(_listaEsperaLSH || [], user);
+        const _peSection = document.getElementById('staffPorEmpezarSection');
+        const _peList    = document.getElementById('staffPorEmpezarList');
+        if (_peList) _peList.innerHTML = '';
+        if (_peSection) _peSection.style.display = 'none';
       } catch (ePE) { console.warn('[porEmpezar]', ePE); }
       
       if (result.success && result.atenciones && result.atenciones.length > 0) {
@@ -2072,25 +1862,10 @@
         const codigoAnterior = window._as1Client;
         const mismaClienta = codigoAnterior === a1.codigo;
         const tieneServicios = slotServices[1] && slotServices[1].length > 0;
-        // D7.1 Objetivo 2 — si el slot ya fue reconstruido con la regla
-        // canónica (típicamente por doLogin, vía _serviciosDetalleActivosParaStaff_)
-        // para esta MISMA clienta y ya tiene servicios, loadStaffHome NO
-        // vuelve a tocar slotServices[1] con una lógica distinta — eso era
-        // exactamente la doble reconstrucción divergente (hallazgo D7,
-        // Hallazgo 2). Solo se refresca metadata visual/fuente canónica; la
-        // reconstrucción de servicios/promo solo corre cuando el slot
-        // realmente lo necesita (vacío o cambio de clienta).
-        const _yaReconstruido1 = mismaClienta && tieneServicios;
 
         // CRÍTICO: actualizar _as1IdEspera con el ID real del ticket activo (puede ser SP- o LE-)
         window._as1IdEspera = a1.idEspera || window._as1IdEspera || '';
-        // D7.1 Objetivo 1 — loadStaffHome también re-obtiene la atención
-        // fresca del backend (misma llamada a getAtenciones que doLogin), así
-        // que también le corresponde mantener la fuente canónica al día,
-        // desde el mismo dato (a1.fuenteReal) y la misma normalización.
-        window._as1FuenteCanonica = normalizarFuenteAtencion_(a1.fuenteReal);
-        window._as1FuenteLineas = (window._as1FuenteCanonica === 'LINEAS'); // espejo de compatibilidad
-
+        
         window._as1Client     = a1.codigo;
         window._as1ClientName = a1.nombre || '';
         var _av1=document.getElementById('as1Avatar'); if(_av1) _av1.textContent = a1.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
@@ -2101,47 +1876,28 @@
         _setNotaRecepcion(1, a1.observaciones);
         renderSecuenciaBanner(1, a1.secuencia || []);
 
-        // Solo resetear/reconstruir slotServices si cambio la clienta o si esta completamente vacia
-        if (!_yaReconstruido1) {
+        // Solo resetear slotServices si cambio la clienta o si esta completamente vacia
+        if (!mismaClienta || !tieneServicios) {
           slotServices[1] = [];
         }
-
-        if (!_yaReconstruido1 && a1.servicio && a1.servicio !== '—') {
+        
+        if (a1.servicio && a1.servicio !== '—') {
           const clientKey1 = normalizeClientKey(a1.nombre);
-          // D7.1 Objetivo 2 — MISMA regla canónica que doLogin, una sola vez:
-          // el desglose moderno (estado==='en_servicio' && staff===currentUser.name
-          // por componente, vía _serviciosDetalleActivosParaStaff_) se evalúa
-          // ANTES que promoNombre y, si aplica, domina el slot por completo.
-          // Antes, esta función tenía su propia lógica separada (PROMOS.find +
-          // unshift/push SIN filtrar staff/estado) — esa reinyección sin
-          // filtro era la vía de contaminación entre staff distintas dentro
-          // del mismo ticket (hallazgo D7-B/D7-C). Ya no se duplica esa lógica.
-          const _detalleLSH1 = Array.isArray(a1.serviciosDetalle) ? a1.serviciosDetalle : [];
-          const _rLSH1 = _detalleLSH1.length > 0 ? _serviciosDetalleActivosParaStaff_(_detalleLSH1, user.name) : null;
 
-          if (_rLSH1 && _rLSH1.esModerno) {
-            slotServices[1] = _rLSH1.lista.map(function (sd) {
-              return {
-                name: sd.servicio || sd.nombre || sd.name || '',
-                price: Number(sd.monto || sd.precio || sd.price || 0),
-                area: sd.area || a1.area || '',
-                esPromo: !!sd.esPromo, status: 'aprobado', _yaEnLinea: true,
-                lineaId: String(sd.lineaId || '')
-              };
-            });
-            if (_rLSH1.lista.length === 0) {
-              console.warn('[LINEAS] atención sin componentes en_servicio para esta staff (loadStaffHome slot1)', a1.idEspera);
-            }
-            if (activePromos[clientKey1]) { delete activePromos[clientKey1]; saveActivePromos(); }
-          } else if (a1.promoNombre && String(a1.promoNombre).trim() !== '') {
-            // Con promo (legacy, sin desglose moderno): comportamiento previo
-            // conservado tal cual, sin cambios de comportamiento.
+          if (a1.promoNombre && String(a1.promoNombre).trim() !== '') {
+            // Con promo: calcular el precio correspondiente al area del staff
             const promoFull = PROMOS.find(p => p.name === a1.promoNombre);
             if (promoFull) {
               const myArea = user.area || 'cejas';
               const myPrice = getMyPromoPrice(promoFull, myArea);
+
+              // Solo agregar si no existe ya
               if (!slotServices[1].find(s => s.name === a1.promoNombre || s.name === a1.servicio)) {
-                slotServices[1].unshift({ name: a1.promoNombre, price: myPrice, area: myArea });
+                slotServices[1].unshift({
+                  name: a1.promoNombre,
+                  price: myPrice,
+                  area: myArea
+                });
               }
               activePromos[clientKey1] = {
                 promo: promoFull,
@@ -2161,26 +1917,41 @@
                 window._takingPromasExtra = a1.promasExtra;
                 try { sessionStorage.setItem('nexserv_promasExtra_' + (a1.idEspera||''), JSON.stringify(a1.promasExtra)); } catch(eS) {}
               }
+              // Actualizar botones de finalización con opciones de promo
+              setTimeout(() => updateFinishButtons(1), 300);
             }
-          } else if (_rLSH1) {
-            // Legacy con detalles, sin promoNombre: usar detalles YA
-            // filtrados por la regla canónica (antes se pusheaban sin
-            // filtrar staff/estado).
-            slotServices[1] = _rLSH1.lista.map(function (sd) {
-              return {
-                name: sd.servicio || sd.nombre || sd.name || '',
-                price: Number(sd.monto || sd.precio || sd.price || 0),
-                area: sd.area || a1.area || '',
-                esPromo: !!sd.esPromo, status: 'aprobado', _yaEnLinea: true,
-                lineaId: String(sd.lineaId || '')
-              };
-            });
-            if (activePromos[clientKey1]) { delete activePromos[clientKey1]; saveActivePromos(); }
           } else {
-            // Sin detalle en absoluto: agregado simple del servicio (comportamiento previo).
-            const price = a1.total || 0;
-            if (!slotServices[1].find(s => s.name === a1.servicio)) {
-              slotServices[1].unshift({ name: a1.servicio, price: price, area: a1.area });
+            // Sin promo: restaurar TODOS los servicios del ticket (no solo el primario).
+            // FIX (13/07): cuando la staff agrega extras (combo + nariz + barbilla), el
+            // ticket llega con varios servicios en serviciosDetalle. Antes esta rama solo
+            // re-agregaba a1.servicio (el nombre combinado en un renglón) → los extras no
+            // se listaban por separado y, tras un refresh, "desaparecían". Ahora se
+            // expande serviciosDetalle en renglones separados, sin duplicar lo ya presente.
+            const _detalle1 = Array.isArray(a1.serviciosDetalle) ? a1.serviciosDetalle : [];
+            if (_detalle1.length > 1) {
+              _detalle1.forEach(function (sd) {
+                const _nm = sd.servicio || sd.nombre || sd.name || '';
+                if (!_nm) return;
+                if (slotServices[1].find(s => s.name === _nm)) return;
+                slotServices[1].push({
+                  name: _nm,
+                  price: Number(sd.monto || sd.precio || sd.price || 0),
+                  area: sd.area || a1.area || '',
+                  esPromo: !!sd.esPromo,
+                  status: 'aprobado',
+                  // ya vienen de líneas existentes en LINEAS → no re-sincronizar al ticket
+                  _yaEnLinea: true
+                });
+              });
+            } else {
+              const price = a1.total || 0;
+              if (!slotServices[1].find(s => s.name === a1.servicio)) {
+                slotServices[1].unshift({
+                  name: a1.servicio,
+                  price: price,
+                  area: a1.area
+                });
+              }
             }
             // Limpiar promo residual de esta clienta (puede ser un servicio nuevo sin promo)
             if (activePromos[clientKey1]) {
@@ -2193,9 +1964,7 @@
         // promoNombre no existe en el catálogo PROMOS del front (p.ej. clienta piloto
         // LINEAS)— cargar el servicio directo desde la atención (serviciosDetalle o
         // servicio/total) para que el panel activo no aparezca vacío tras un refresh.
-        // D7.1 Objetivo 2 — también gated por !_yaReconstruido1: si el slot
-        // ya estaba correctamente poblado, este fallback no debe pisarlo.
-        if (!_yaReconstruido1 && (!slotServices[1] || slotServices[1].length === 0) && a1.servicio && a1.servicio !== '—') {
+        if ((!slotServices[1] || slotServices[1].length === 0) && a1.servicio && a1.servicio !== '—') {
           const _det1p = Array.isArray(a1.serviciosDetalle) ? a1.serviciosDetalle : [];
           if (_det1p.length > 0) {
             slotServices[1] = _det1p.map(function(sd){ return {
@@ -2210,10 +1979,6 @@
           }
         }
         renderServicesForSlot(1);
-        // D7.1 Objetivo 1 — refrescar botón de finalización con la fuente
-        // canónica ya actualizada arriba (antes esto solo se hacía dentro
-        // de la rama de promo legacy).
-        setTimeout(() => { try { updateFinishButtons(1); } catch (eUFB1LSH) { console.warn('[loadStaffHome] updateFinishButtons(1):', eUFB1LSH); } }, 300);
 
         // Actualizar total: solo servicios no pendientes y no rechazados
         const total1 = slotServices[1].reduce((sum, s) => {
@@ -2235,19 +2000,37 @@
             loadPestFichaQuick(_pk4, 1);
           }).catch(() => loadPestFichaQuick(_pk4, 1));
         }
+
+        // ── INC-EXTRA-SP-0446 · FASE A — contexto Facial en REENTRADA ────────
+        // Simétrico al bloque de pestañas de arriba. Sin esto, al volver por
+        // card-click/refresh el contexto _currentFacial* quedaba indefinido y
+        // loadFacialFichaQuick no podía montar evFacialAcc1 (EvidenciasCore lee
+        // codigo/nombre/servicio/ticket_ref EXCLUSIVAMENTE de esas variables).
+        // SLOT 2: no hay call site equivalente porque loadStaffHome NO
+        // reconstruye a2 en este punto (solo precarga el slot 1). No se
+        // inventa una reconstrucción artificial acá.
+        if (user.area === 'facial') {
+          await restaurarContextoFacialActivo(1, a1);
+        }
       } else {
         if (section) section.style.display = 'none';
       }
       
       // Actualizar contadores
-      // D2-F3-A — política de fallo LINEAS idéntica a refrescarAsignacionesStaff():
-      // si _listaEsperaLSH === null (getTableroLineas falló), NO se llama al
-      // contador — se conserva el último valor conocido. NO se degrada a
-      // getListaEspera legacy: _actualizarContadoresStaffDesdeLista_ consume
-      // líneas crudas LINEAS (w.staff) y el shape legacy (asignadaA/tomadaPor)
-      // daría 0. Solo se recalcula cuando la lectura LINEAS tuvo éxito.
-      if (_listaEsperaLSH !== null) {
-        _actualizarContadoresStaffDesdeLista_(_listaEsperaLSH, user);
+      // INC-LATENCIA-TICKET-STAFF — sin segunda lectura: reutiliza la cola ya
+      // refrescada arriba por refreshStaffQueue() (cero requests extra).
+      const waitResult = { success: true, lista: (window._staffQueueState && window._staffQueueState.raw) || [] };
+      if (waitResult.success) {
+        const allowed = AREA_FILTER[user.area] || [];
+        const areaMap2 = { 'cejas': 'cejas', 'depilación': 'depilacion', 'depilacion': 'depilacion', 'pestañas': 'pestanas', 'pestanas': 'pestanas', 'facial': 'facial', 'lifting / retiro': 'retiro_lifting', 'pestañas/cejas': 'retiro_lifting' };
+        // INC-COLA-STAFF-02 · mismo clasificador que waitList y "Por empezar":
+        // los tres números salen ahora de la misma regla lógica.
+        const myCount = (typeof _staffQueueMias === 'function')
+          ? _staffQueueMias(waitResult.lista, user).length
+          : 0;
+        var _nb=document.getElementById('navBadge'); if(_nb) _nb.textContent = myCount;
+        var _nb2=document.getElementById('navBadge2'); if(_nb2) _nb2.textContent = myCount;
+        var _ps = document.getElementById('pendingStat'); if (_ps) { var _psv = _ps.querySelector('.value'); if (_psv) _psv.textContent = myCount; }
       }
 
       // Cargar servicios completados hoy
@@ -2312,6 +2095,56 @@
       console.error('Error cargando staff home:', err);
     }
   }
+
+  // ══════════════════════════════════════════════════════════════════
+  // INC-EXTRA-SP-0446 · FASE A — RECONSTRUCCIÓN DE CONTEXTO FACIAL
+  // Los setters post-toma (nexserv-main-1.js) y post-confirmación
+  // (confirmServiceAndClose, más abajo) NO se tocan: siguen siendo los
+  // caminos vigentes. Este helper cubre la ruta que faltaba —la reentrada—
+  // reutilizando LAS MISMAS fórmulas para servicio y precio.
+  // Toma los datos de la atención ya reconstruida, nunca del DOM, y no
+  // condiciona por prefijo de ticket: sirve para SN / SP / TM / LE.
+  // ══════════════════════════════════════════════════════════════════
+  async function restaurarContextoFacialActivo(slot, atencion) {
+    try {
+      const user = window.currentUser;
+      if (!user || String(user.area || '').toLowerCase() !== 'facial') return;
+      const a = atencion || null;
+      if (!a || !a.codigo) return;
+
+      const clientKey = String(a.codigo).toLowerCase().replace(/-/g, '');
+      window._currentFacialClientKey    = clientKey;
+      window._currentFacialClientNombre = a.nombre || '';
+      window._currentFacialClientCodigo = a.codigo;
+
+      // Misma fórmula que los caminos existentes (post-toma / post-confirmación).
+      const svcs = slotServices[slot] || [];
+      window._currentFacialSvcName  = svcs.filter(s => s.status !== 'rechazado').map(s => s.name).join(' + ') || '';
+      window._currentFacialSvcPrice = svcs.filter(s => s.status !== 'rechazado').reduce((s, v) => s + Number(v.price || 0), 0);
+      window._facialFichaSlot = slot;
+      // _as1IdEspera / _as2IdEspera ya los fija el flujo de loadStaffHome; acá
+      // NO se sobreescriben — EvidenciasCore los lee para el ticket_ref.
+
+      // La ficha se trae del backend ANTES del quick: si no, CLIENT_PROFILES
+      // está vacío tras un refresh y el panel diría "Sin ficha" existiendo una.
+      // Mismo patrón que confirmServiceAndClose. Nunca se inventa ficha local.
+      try {
+        const facRes = await apiGet('getFichaFacial', { codigo: a.codigo });
+        if (facRes && facRes.success && facRes.ficha) {
+          if (!CLIENT_PROFILES[clientKey]) CLIENT_PROFILES[clientKey] = { name: a.nombre || '', code: a.codigo, facial: {} };
+          if (!CLIENT_PROFILES[clientKey].facial) CLIENT_PROFILES[clientKey].facial = {};
+          CLIENT_PROFILES[clientKey].facial.ficha = facRes.ficha;
+        }
+      } catch (eFic) { console.warn('[restaurarContextoFacialActivo] getFichaFacial:', eFic && eFic.message); }
+
+      // Se llama siempre: sin ficha el quick muestra "Sin ficha" y EvidenciasCore
+      // se monta igual (el acordeón va en ambas ramas de loadFacialFichaQuick).
+      if (typeof loadFacialFichaQuick === 'function') loadFacialFichaQuick(clientKey, slot);
+    } catch (eCtx) {
+      console.warn('[restaurarContextoFacialActivo]', eCtx && eCtx.message);
+    }
+  }
+  window.restaurarContextoFacialActivo = restaurarContextoFacialActivo;
 
   function loadActiveService(idx) {
     // Ya precargado en loadStaffHome
@@ -2498,6 +2331,35 @@
     alert('✅ Ficha activada: ' + fichas[fichaIdx].modelo + ' · ' + fichas[fichaIdx].diseno);
   }
 
+  // INC-FICHA-PESTANAS-MODELO-CATALOGO · deriva el modelo desde el nombre del
+  // servicio registrado en la atención. NO duplica la lista: lee las <option>
+  // reales de #npfModelo, así cualquier modelo que se agregue al select queda
+  // cubierto automáticamente. Gana la coincidencia MÁS LARGA para que
+  // "Mega volumen ruso Kylie" no caiga en "Volumen ruso", ni
+  // "Volumen ligero wispy" en "Volumen ligero".
+  function _modeloPestanasDesdeServicio(nombreServicio) {
+    const norm = function (v) {
+      return String(v == null ? '' : v).toLowerCase()
+        .replace(/[áà]/g, 'a').replace(/[éè]/g, 'e').replace(/[íì]/g, 'i')
+        .replace(/[óò]/g, 'o').replace(/[úù]/g, 'u').replace(/ñ/g, 'n')
+        .replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    };
+    const svc = norm(nombreServicio);
+    if (svc === '') return '';
+    const sel = document.getElementById('npfModelo');
+    if (!sel || !sel.options) return '';
+    let mejor = '', mejorLargo = 0;
+    for (let i = 0; i < sel.options.length; i++) {
+      const txt = String(sel.options[i].value || sel.options[i].text || '').trim();
+      if (txt === '') continue;                 // "Seleccionar..." / "— Sin ficha —"
+      const t = norm(txt);
+      if (t !== '' && svc.indexOf(t) !== -1 && t.length > mejorLargo) {
+        mejor = txt; mejorLargo = t.length;
+      }
+    }
+    return mejor;
+  }
+
   function openNewPestFicha(clientKey, slot) {
     window._newPestClient = clientKey;
     window._newPestSlot = slot;
@@ -2505,6 +2367,16 @@
     document.getElementById('npfDiseno').selectedIndex = 0;
     document.getElementById('npfTallas').value = '';
     document.getElementById('npfObs').value = '';
+    // INC-FICHA-PESTANAS-MODELO-CATALOGO · preseleccionar el modelo según el
+    // servicio ya registrado en la atención (ej. "Pestañas volumen Griego" →
+    // "Volumen griego"). Si no hay coincidencia, queda en "Seleccionar...".
+    try {
+      const _svcs = (typeof slotServices !== 'undefined' && slotServices[slot]) || [];
+      for (let i = 0; i < _svcs.length; i++) {
+        const _m = _modeloPestanasDesdeServicio(_svcs[i] && _svcs[i].name);
+        if (_m) { document.getElementById('npfModelo').value = _m; break; }
+      }
+    } catch (eMod) { console.warn('[npfModelo preselect]', eMod && eMod.message); }
     document.getElementById('newPestFichaModal').classList.add('active');
   }
 
@@ -2961,47 +2833,8 @@
 
   // === ASIGNAR SERVICIOS/PROMOS (Mikaela) ===
   
-  // ── P4-FE — identidad de operación para "+ Servicio Extra" ────────────────
-  // Genera UN lineRequestId por apertura/intención. Formato exigido por
-  // _lnValidarLineRequestId_ (NexServ_Lineas.gs): [A-Za-z0-9_-], ≤128 chars.
-  // NO deriva del contenido (ticket+servicio+precio+staff): dos extras
-  // legítimamente idénticos deben poder coexistir, así que cada apertura
-  // produce un ID nuevo. NO usa solo timestamp: dos aperturas en el mismo ms
-  // colisionarían.
-  function _nuevoExtraLineRequestId_() {
-    var raw = '';
-    try {
-      if (typeof crypto !== 'undefined' && crypto && typeof crypto.randomUUID === 'function') {
-        raw = crypto.randomUUID().replace(/-/g, '');
-      }
-    } catch (e) { raw = ''; }
-    if (!raw) {
-      raw = Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
-          + Math.random().toString(36).slice(2, 10);
-    }
-    var id = ('EXTRA_' + raw).replace(/[^A-Za-z0-9_-]/g, '');
-    return id.slice(0, 128);
-  }
-
-  // Limpieza del contexto de "+ Servicio Extra". Se llama en éxito definitivo
-  // y en cierre/cancelación del modal — NUNCA ante error de backend, porque
-  // un retry de la MISMA intención debe conservar el mismo lineRequestId.
-  function _limpiarCtxServicioExtra_() {
-    window._extraTicketId       = null;
-    window._extraLineRequestId  = null;
-    window._extraLineaPadre     = null;
-  }
-  window._limpiarCtxServicioExtra_ = _limpiarCtxServicioExtra_;
-
   function openAssignServiceModal(clientCode, clientName, extraTicketId) {
     window._extraTicketId = extraTicketId || null;
-    // Nueva intención → nueva identidad de operación. Se crea UNA sola vez
-    // acá; confirmAssignService la lee sin regenerarla.
-    // lineaPadre: desde este card (clientas completadas / por_verificar) no
-    // existen candidatas válidas — el contrato del backend admite '' para
-    // tickets NO TM. No se infiere ninguna línea. Ver decisión C1.
-    window._extraLineRequestId = window._extraTicketId ? _nuevoExtraLineRequestId_() : null;
-    window._extraLineaPadre    = '';
     window._assigningClient = { code: clientCode, name: clientName };
     document.getElementById('assignSvcClientName').textContent = clientName;
     document.getElementById('assignSvcArea').value = '';
@@ -3079,40 +2912,20 @@
       // ── Modo "+ Servicio Extra": agregar al ticket existente ──
       if (window._extraTicketId) {
         const idEx = window._extraTicketId;
-
-        // TM — FAIL CLOSED. El backend exige lineaPadre SIEMPRE para TM-
-        // (LINEA_PADRE_REQUERIDA_TM). Desde este card (clientas completadas)
-        // no hay candidatas en estado 'esperando'/'en_servicio', así que no
-        // se puede resolver. NO se infiere padre por servicio, staff, área,
-        // precio ni posición: se bloquea antes del POST.
-        if (String(idEx).indexOf('TM-') === 0) {
-          alert('No se puede agregar este servicio extra desde esta vista porque el ticket requiere identificar el servicio de origen.');
-          return; // modal abierto y contexto intacto
-        }
-
-        // Identidad de operación: se REUSA la generada al abrir el modal.
-        // Nunca se regenera acá — un retry debe conservar el mismo ID.
-        const rqEx = window._extraLineRequestId || '';
-        const padreEx = window._extraLineaPadre || '';
         try {
           const rEx = await apiPost('agregarServicioExtra', {
-            idEspera: idEx, area: svc.area, servicio: svc.name, precio: svc.price, chica: chica,
-            lineRequestId: rqEx, lineaPadre: padreEx
+            idEspera: idEx, area: svc.area, servicio: svc.name, precio: svc.price, chica: chica
           });
+          window._extraTicketId = null;
           if (rEx && rEx.success) {
-            // Éxito definitivo → recién acá se limpia el contexto.
-            _limpiarCtxServicioExtra_();
             if (typeof showToast === 'function') showToast('✓ Servicio extra agregado para ' + (client ? client.name : 'la clienta'));
             closeModal();
             loadMikaelaHome();
           } else {
-            // Error de backend: NO se limpia nada — el reintento de esta
-            // misma intención debe viajar con el MISMO lineRequestId (y
-            // seguir en modo extra, no caer a asignación normal).
             alert(((rEx && (rEx.message || rEx.error)) || 'No se pudo agregar el servicio extra'));
           }
         } catch (err) {
-          // Igual que arriba: fallo de red no invalida la intención.
+          window._extraTicketId = null;
           console.error(err);
           alert('Error al agregar servicio extra');
         }
@@ -3936,6 +3749,44 @@
                 + ' data-nombre="' + String(w.nombre||'').replace(/"/g,'&quot;') + '"'
                 + ' style="width:100%;margin-top:6px;padding:10px;background:var(--bg-card);color:#c0392b;border:1.5px solid #c0392b;border-radius:var(--radius-pill);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">🚪 Clienta se retira — cobrar lo realizado</button>';
             })();
+            // ── PLAN B · B4 — Reasignación POR COMPONENTE (tickets nativos LINEAS) ──
+            // reassignHTML (arriba) es un ÚNICO control por tarjeta y manda solo
+            // ticket_ref: para una promo nativa con varios pendientes no puede
+            // decir CUÁL se reasigna. Este bloque emite un control por componente
+            // 'esperando', cada uno con su data-linea-id. Solo aplica a fuente
+            // LineasNativo; cualquier otro ticket sigue usando reassignHTML sin
+            // ningún cambio.
+            // Criterio de "pendiente": estado 'esperando' (con o sin staff) —
+            // exactamente el mismo que valida reasignarComponenteNativoPorLineaId_.
+            // areaKey: se deriva del ÁREA del componente (autoridad de LINEAS), no
+            // del texto combinado area+servicio+obs de _pendKey.
+            const _compsPend = (_fuente === 'LineasNativo' && Array.isArray(w.serviciosDetalle))
+              ? w.serviciosDetalle.filter(function (c) {
+                  return String(c.estado || '') === 'esperando' && String(c.id || '').trim();
+                })
+              : [];
+            const reassignPorComponenteHTML = _compsPend.length ? _compsPend.map(function (c, ci) {
+              const selIdC = 'reSelC_' + _uid + '_' + ci;
+              const btnIdC = 'reBtnC_' + _uid + '_' + ci;
+              const _staffC = String(c.staff || '').trim();
+              return '<div style="margin-top:8px;padding:8px;border:1px dashed var(--line);border-radius:10px;">'
+                + '<div style="font-size:11px;color:var(--ink-soft);font-weight:700;margin-bottom:5px;">⏳ '
+                + String(c.servicio || '').replace(/</g,'&lt;') + ' · $' + Number(c.monto || 0)
+                + (_staffC ? ' · asignado a ' + _staffC.replace(/</g,'&lt;') : ' · sin asignar') + '</div>'
+                + '<select id="' + selIdC + '" data-btnid="' + btnIdC + '" data-action="toggleReasignar" style="width:100%;padding:9px 10px;border:1.5px solid var(--line);border-radius:10px;font-family:inherit;font-size:12px;background:var(--bg-card);color:var(--ink);">'
+                + _staffOpcionesReasignar(_normAreaKey(String(c.area || '')), busyStaff)
+                + '</select>'
+                + '<button id="' + btnIdC + '"'
+                + ' data-action="reasignar"'
+                + ' data-id-espera="' + (w.idEspera||'') + '"'
+                + ' data-area-idx=""'
+                + ' data-linea-id="' + String(c.id||'').replace(/"/g,'&quot;') + '"'
+                + ' data-sel-id="' + selIdC + '"'
+                + ' data-nombre="' + String(w.nombre||'').replace(/"/g,'&quot;') + '"'
+                + ' data-codigo="' + String(w.codigo||'').replace(/"/g,'&quot;') + '"'
+                + ' style="display:none;width:100%;margin-top:6px;padding:11px;background:var(--ink);color:white;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;">Asignar este servicio</button>'
+                + '</div>';
+            }).join('') : '';
             // ── Ticket agendado por SYNA: el servicio/área ya vienen definidos,
             // así que se asigna staff directo con el mismo dropdown que usa multi-área
             // (no hace falta re-elegir el servicio). Si igual quiere cambiarlo, abajo
@@ -3975,7 +3826,7 @@
                 </div>
                 ${estadoHTML}
                 ${hechasHTML}
-                ${reassignHTML}
+                ${reassignPorComponenteHTML || reassignHTML}
                 <div style="display:flex;gap:6px;margin-top:10px;">
                   <button data-action="asignarServicio" data-codigo="${w.codigo}" data-nombre="${w.nombre}" style="flex:1;padding:8px 12px;background:var(--accent);color:white;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;">➡️ Redirigir servicio</button>
                   <button data-action="asignarPromo" data-codigo="${w.codigo}" data-nombre="${w.nombre}" style="flex:1;padding:8px 12px;background:var(--success);color:white;border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;">➡️ Redirigir promo</button>
@@ -3995,7 +3846,7 @@
               </div>
               ${estadoHTML}
               ${_desgloseMultiHTML}
-              ${_esMultiPromo ? reassignHTML : `${(!estaAsignada && w.servicio && String(w.servicio).trim() && String(w.servicio).trim() !== '—') ? _syncAssignHTML : ''}<div style="display: flex; gap: 6px; margin-top: 10px;">
+              ${_esMultiPromo ? (reassignPorComponenteHTML || reassignHTML) : `${(!estaAsignada && w.servicio && String(w.servicio).trim() && String(w.servicio).trim() !== '—') ? _syncAssignHTML : ''}<div style="display: flex; gap: 6px; margin-top: 10px;">
                 <button data-action="asignarServicio" data-codigo="${w.codigo}" data-nombre="${w.nombre}" style="flex: 1; padding: 8px 12px; background: var(--accent); color: white; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 11px; font-weight: 700; cursor: pointer;">💼 Servicio</button>
                 <button data-action="asignarPromo" data-codigo="${w.codigo}" data-nombre="${w.nombre}" style="flex: 1; padding: 8px 12px; background: var(--success); color: white; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 11px; font-weight: 700; cursor: pointer;">🏷 Promo</button>
               </div>`}
@@ -4022,7 +3873,8 @@
                 const selId    = btn.getAttribute('data-sel-id')    || '';
                 const nombre   = btn.getAttribute('data-nombre')    || '';
                 const codigo   = btn.getAttribute('data-codigo')    || '';
-                reasignarStaff(idEspera, areaIdx, selId, nombre, codigo);
+                const lineaId  = btn.getAttribute('data-linea-id')  || '';
+                reasignarStaff(idEspera, areaIdx, selId, nombre, codigo, lineaId);
               } else if (action === 'retirar') {
                 const idEspera = btn.getAttribute('data-id-espera') || '';
                 const nombre   = btn.getAttribute('data-nombre')    || '';
@@ -4116,67 +3968,18 @@
               const badgeColor = esPendConf ? 'var(--warning, #f59e0b)' : 'var(--info)';
               const badgeBg = esPendConf ? '#fff8e1' : 'var(--info-bg)';
               const badgeLabel = esPendConf ? '⏳ CONFIRMANDO' : 'EN CURSO';
-              // ── P3 — BADGE DE ESTADO POR LÍNEA ────────────────────────────
-              // Cada componente de serviciosDetalle tiene su propio `estado`
-              // real de LINEAS. Antes se listaban los renglones pero el badge
-              // era UNO SOLO fuera del loop, heredado del estado del grupo —
-              // por eso dos líneas con estados distintos se veían iguales.
-              // El estado sale EXCLUSIVAMENTE de d.estado; nunca del estado
-              // del ticket, del grupo, de la primera línea, de staff ni de
-              // promoNombre.
-              // Los badges son etiquetas informativas: sin onclick, sin
-              // cursor:pointer, sin handlers de promo. No son botones.
-              const _P3_BADGES = {
-                esperando:     { txt: 'EN ESPERA',  bg: 'var(--warning-bg)', col: 'var(--warning)' },
-                en_servicio:   { txt: 'EN CURSO',   bg: 'var(--info-bg)',    col: 'var(--info)' },
-                por_verificar: { txt: 'COMPLETADO', bg: 'var(--success-bg)', col: 'var(--success)' },
-                completado:    { txt: 'COMPLETADO', bg: 'var(--success-bg)', col: 'var(--success)' },
-                cobrado:       { txt: 'COBRADO',    bg: 'var(--success-bg)', col: 'var(--success)' }
-              };
-              // "Moderno" = al menos un componente trae `estado` propio. Mismo
-              // criterio que _serviciosDetalleActivosParaStaff_ usa en el panel
-              // de staff — no se introduce una segunda definición.
-              const _detP3 = Array.isArray(a.serviciosDetalle) ? a.serviciosDetalle : [];
-              const _esModernoP3 = _detP3.some(d => String((d && d.estado) || '').trim() !== '');
-              // 'anulado' no es un componente operativo: no se lista ni suma.
-              const _detOperativosP3 = _esModernoP3
-                ? _detP3.filter(d => String(d.estado || '').trim().toLowerCase() !== 'anulado')
-                : _detP3;
-
-              let _subticketsHTML;
-              if (_esModernoP3 && _detOperativosP3.length > 0) {
-                _subticketsHTML = _detOperativosP3.map(d => {
-                  const _est = String(d.estado || '').trim().toLowerCase();
-                  const _b = _P3_BADGES[_est] || { txt: String(d.estado || '—').toUpperCase(), bg: 'var(--bg)', col: 'var(--ink-faint)' };
-                  return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--ink-soft);padding:2px 0;">`
-                    + `<span>• ${d.servicio} · <strong>$${Number(d.monto || 0)}</strong></span>`
-                    + `<span style="font-size:9px;font-weight:700;background:${_b.bg};color:${_b.col};padding:2px 7px;border-radius:100px;flex-shrink:0;">${_b.txt}</span>`
-                    + `</div>`;
-                }).join('');
-              } else {
-                // Legacy / sin desglose moderno: comportamiento previo EXACTO.
-                _subticketsHTML = (_detP3.length > 1)
-                  ? _detP3.map(d => `<div style="font-size:11px;color:var(--ink-soft);">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong></div>`).join('')
-                  : `<div style="font-size:11px;color:var(--ink-soft);">${servicioLimpio}</div>`;
-              }
-              // Con desglose moderno el badge pertenece a CADA línea, así que
-              // el badge de grupo no se emite (sería un estado agregado que no
-              // representa a ninguna línea en particular).
-              const _badgeGrupoHTML = _esModernoP3 && _detOperativosP3.length > 0
-                ? ''
-                : `<div style="font-size:10px;font-weight:700;background:${badgeBg};color:${badgeColor};padding:3px 8px;border-radius:100px;animation:pulse 2s infinite;">${badgeLabel}</div>`;
+              // Ticket madre con varios subtickets → listar cada servicio en su
+              // renglón (antes se concatenaban en una sola línea: "A + B + C + D").
+              const _subticketsHTML = (a.serviciosDetalle && a.serviciosDetalle.length > 1)
+                ? a.serviciosDetalle.map(d => `<div style="font-size:11px;color:var(--ink-soft);">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong></div>`).join('')
+                : `<div style="font-size:11px;color:var(--ink-soft);">${servicioLimpio}</div>`;
               timelineHTML += `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;">
                 <div style="width:28px;height:28px;border-radius:50%;background:${badgeBg};border:2px solid ${badgeColor};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;animation:pulse 2s infinite;">${iconActual}</div>
                 <div style="flex:1;"><div style="font-size:12px;font-weight:800;color:${badgeColor};">${labelActual} · ${a.tomadaPor}</div>
                 ${_subticketsHTML}
                 <div style="font-size:10px;color:var(--ink-faint);">Desde ${a.horaToma || '?'}${esPendConf?' · Esperando confirmación':''}</div></div>
-                ${_badgeGrupoHTML}</div>`;
-              // PREREQ-E (GATE 0) — antes: este fallback corría siempre que
-              // a.promoNombre existiera, incluso cuando _subticketsHTML ya
-              // había dibujado el desglose moderno completo (línea esperando
-              // incluida) → duplicado visual. Ahora solo reconstruye desde
-              // catálogo PROMOS cuando NO hay desglose moderno operativo.
-              if (a.promoNombre && !(_esModernoP3 && _detOperativosP3.length > 0)) {
+                <div style="font-size:10px;font-weight:700;background:${badgeBg};color:${badgeColor};padding:3px 8px;border-radius:100px;animation:pulse 2s infinite;">${badgeLabel}</div></div>`;
+              if (a.promoNombre) {
                 const promoFull = (PROMOS || []).find(p => p.name === a.promoNombre);
                 if (promoFull && promoFull.division) {
                   const areaActualNorm = String(a.area||'').toLowerCase().replace('ó','o').replace('á','a').replace('é','e').replace('ñ','n');
@@ -4203,26 +4006,9 @@
             const _promoFullTot = a.promoNombre ? (PROMOS || []).find(p => p.name === a.promoNombre) : null;
             const _promoPrecioFijo = _promoFullTot ? Number(_promoFullTot.price || _promoFullTot.precio || 0) : 0;
             if (a.serviciosDetalle && a.serviciosDetalle.length > 0) {
-              // P3.4 — 'anulado' nunca suma al total operativo. El resto de
-              // la lógica (promo de precio fijo vs multi-servicio) queda
-              // EXACTAMENTE igual — no se toca el criterio de no duplicar.
-              // El flag de "desglose moderno" se recalcula acá porque el del
-              // bloque de render es block-scoped (vive dentro del else
-              // normal/promo) y este cálculo corre fuera de ese bloque.
-              const _modernoTot = a.serviciosDetalle.some(d => String((d && d.estado) || '').trim() !== '');
-              const totalDetalle = a.serviciosDetalle
-                .filter(d => String((d && d.estado) || '').trim().toLowerCase() !== 'anulado')
-                .reduce((s, d) => s + Number(d.monto || 0), 0);
+              const totalDetalle = a.serviciosDetalle.reduce((s, d) => s + Number(d.monto || 0), 0);
               if (totalDetalle > 0) {
-                if (_modernoTot) {
-                  // P3.4 — con desglose MODERNO (estado por componente), las
-                  // líneas de LINEAS son la fuente autoritativa del total:
-                  // a.total ya ES la suma de esas mismas líneas (ver el
-                  // agrupado de handleGetAtenciones), así que sumarlas encima
-                  // duplicaba el importe ($32 → $64). Se usa totalDetalle,
-                  // que además ya excluye 'anulado'.
-                  totalAcumDisplay = totalDetalle;
-                } else if (_promoPrecioFijo > 0) {
+                if (_promoPrecioFijo > 0) {
                   // Promo de precio fijo: el total ES el precio del combo. Nunca sumar las
                   // partes del propio combo encima. (Si a.total ya incluye adicionales
                   // reales fuera del combo, se respeta el mayor.)
@@ -5664,7 +5450,8 @@
       descripcion: desc,
       monto:       monto,
       responsable: resp,
-      notas:       notas
+      notas:       notas,
+      userId:      _siraIdDesdeNombre(window.currentUser && window.currentUser.name)
     });
 
     if (btn) { btn.disabled = false; btn.textContent = 'Confirmar gasto'; }
