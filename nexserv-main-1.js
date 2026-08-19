@@ -1498,11 +1498,61 @@
     // válido para todos. No se pasa el escenario al handler ni se agrega
     // estado global solo para personalizar el mensaje.
     if (typeof showToast === 'function') showToast('✅ Tu parte quedó completada. Central continuará con el ticket.');
-    window['_as' + slot + 'FuenteCanonica'] = null; // D7.1 — neutraliza; loadStaffHome no reescribe FuenteCanonica, un refresh real la restaura desde a.fuenteReal
-    window['_as' + slot + 'FuenteLineas'] = false; // espejo de compatibilidad — esta atención de este slot ya terminó
-    // Refresco completo del panel de staff — evita reimplementar el reset
-    // manual del slot (avatar/nombre/servicios/botones); usa la función ya
-    // existente, sin modificarla.
+    // ── CENTRAL HANDOFF FIX 01 · PARTE B — UI stale ───────────────────────
+    // ANTES: solo se neutralizaban dos flags de fuente y se llamaba a
+    // loadStaffHome(). Como el slot seguía cargado (_asNIdEspera,
+    // slotServices…) y la vista activeService seguía en pantalla, la staff
+    // quedaba viendo su atención vieja después de terminarla.
+    //
+    // AHORA se decide con el estado CANÓNICO releído de LINEAS, no con una
+    // suposición. El criterio para cerrar es tener CERO líneas propias
+    // en_servicio — distinto de "quedan pendientes en el ticket": si Laura
+    // sigue trabajando, el ticket tiene pendientes pero María igual debe
+    // salir de su pantalla.
+    let _tengoLineasPropias = false;
+    try {
+      const _post = await apiGet('getTicketLineas', { ticketRef: ticketRef });
+      const _lp = (_post && _post.success && Array.isArray(_post.lineasActivas)) ? _post.lineasActivas : [];
+      _tengoLineasPropias = _lp.some(function (l) {
+        return String(l.staff || '').trim().toLowerCase() === staffN.trim().toLowerCase()
+            && String(l.estado || '').trim() === 'en_servicio';
+      });
+    } catch (e) {
+      // Relectura fallida → no se puede afirmar que terminé: se conserva el
+      // slot y solo se refresca. Nunca cerrar la pantalla "por las dudas".
+      _tengoLineasPropias = true;
+    }
+
+    if (_tengoLineasPropias) {
+      // Todavía tengo trabajo propio en este ticket (p. ej. finalicé un
+      // componente y conservo otro en servicio): NO se limpia el slot.
+      try { updateFinishButtons(slot); } catch (e) {}
+      if (typeof loadStaffHome === 'function') { try { await loadStaffHome(); } catch (e) {} }
+      return;
+    }
+
+    // Sin líneas propias en servicio → cerrar SOLO este slot. La otra
+    // atención de la staff (si tiene slot 2 activo) queda intacta: no se
+    // hace limpieza global.
+    try {
+      const _nomSlot = window['_as' + slot + 'Nombre'] || '';
+      if (typeof slotServices === 'object' && slotServices) slotServices[slot] = [];
+      window['_as' + slot + 'IdEspera']       = '';
+      window['_as' + slot + 'Codigo']         = '';
+      window['_as' + slot + 'Nombre']         = '';
+      window['_as' + slot + 'FuenteCanonica'] = null;
+      window['_as' + slot + 'FuenteLineas']   = false;
+      // activePromos se indexa por clienta: solo se borra la entrada de ESTA
+      // atención, nunca el objeto completo.
+      if (_nomSlot && typeof normalizeClientKey === 'function' && typeof activePromos === 'object') {
+        delete activePromos[normalizeClientKey(_nomSlot)];
+      }
+    } catch (e) {}
+
+    // Navegación: la vista activeService no puede quedar visible. Se usa el
+    // mismo par show()+loadStaffHome() que ya emplea el resto del archivo —
+    // sin location.reload, sin setTimeout, sin refresh arbitrario.
+    try { if (typeof show === 'function') show('staffHome'); } catch (e) {}
     if (typeof loadStaffHome === 'function') { try { await loadStaffHome(); } catch (e) {} }
   }
   window._finalizarParteLineas_ = _finalizarParteLineas_;
