@@ -3144,16 +3144,45 @@
         alert('No se pudieron identificar los servicios de este ticket. Actualizá la lista e intentá de nuevo.');
         return;
       }
-      window._depiItems = _elegiblesLN.map(c => ({
-        id: String(c.id).trim(),
-        nombre: String(c.servicio || ''),
-        area: String(c.area || ''),
-        precio: Number(c.monto || 0),
-        estado: String(c.estado || ''),
-        staff: String(c.staff || ''),
-        checked: true,
-        esNativo: true
-      }));
+      // ── COMPATIBILIDAD DE ÁREA ───────────────────────────────────────────
+      // Una promo puede cruzar áreas (ej. cejas + pestañas). La staff solo puede
+      // aceptar los componentes de SU familia: ofrecerle uno de otra área la
+      // llevaría a tomar trabajo que no puede hacer, y el backend lo rechazaría
+      // después con STAFF_INCOMPATIBLE_CON_AREA.
+      // Autoridad: la misma que usa el selector de reasignación de Central
+      // (_normAreaKey + STAFF_POR_AREA, nexserv-main-4.js) — no se inventa
+      // clasificación nueva. Si no se puede resolver, NO se bloquea: fail-open
+      // acá es correcto porque el backend valida igual antes de escribir.
+      const _yoModal = String((window.currentUser && window.currentUser.name) || '').trim();
+      const _puedoArea = function (areaComp) {
+        try {
+          if (typeof _normAreaKey !== 'function' || typeof STAFF_POR_AREA === 'undefined') return true;
+          const k = _normAreaKey(String(areaComp || ''));
+          const lista = (STAFF_POR_AREA && STAFF_POR_AREA[k]) || null;
+          if (!lista || !lista.length) return true;   // área no resuelta → no bloquear
+          return lista.some(n => String(n).trim().toLowerCase() === _yoModal.toLowerCase());
+        } catch (e) { return true; }
+      };
+      window._depiItems = _elegiblesLN.map(c => {
+        const _areaC = String(c.area || '');
+        const _bloq  = !_puedoArea(_areaC);
+        return {
+          id: String(c.id).trim(),
+          nombre: String(c.servicio || ''),
+          area: _areaC,
+          precio: Number(c.monto || 0),
+          estado: String(c.estado || ''),
+          staff: String(c.staff || ''),
+          bloqueado: _bloq,          // otra área: no seleccionable
+          checked: !_bloq,           // los bloqueados arrancan desmarcados
+          esNativo: true
+        };
+      });
+      // Si NINGUNO es de su área, no hay nada que ofrecerle.
+      if (window._depiItems.every(it => it.bloqueado)) {
+        alert('Los servicios de este ticket no son de tu área. Avisá a Mikaela para que lo asigne.');
+        return;
+      }
       if (window._depiItems.length > 1) {
         splitEl.style.display = 'block';
         normalEl.style.display = 'none';
@@ -3213,6 +3242,18 @@
           </div>
         </div>`;
       }
+      if (item.bloqueado) {
+        // Componente de OTRA área — visible pero no seleccionable, para que la
+        // staff entienda qué más lleva el ticket sin poder tomarlo.
+        return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:12px;margin-bottom:8px;opacity:0.65;border:1.5px dashed var(--line);">
+          <span style="font-size:16px;flex-shrink:0;">🔒</span>
+          <div style="flex:1;">
+            <div style="font-size:13px;font-weight:700;color:var(--ink-soft);">${item.nombre}</div>
+            <div style="font-size:11px;color:var(--ink-faint);font-weight:600;">Otra área (${item.area || '—'}) · lo toma otra staff</div>
+          </div>
+          ${item.precio > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--ink-faint);">$${item.precio}</div>` : ''}
+        </div>`;
+      }
       // Área pendiente — seleccionable
       return `<label style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--info-bg);border-radius:12px;margin-bottom:8px;cursor:pointer;border:2px solid var(--info);">
         <input type="checkbox" ${item.checked ? 'checked' : ''} onchange="toggleDepiItem(${i}, this.checked)"
@@ -3230,6 +3271,7 @@
 
   function toggleDepiItem(idx, checked) {
     if (window._depiItems && window._depiItems[idx] !== undefined) {
+      if (window._depiItems[idx].bloqueado) return;   // otra área: no seleccionable
       window._depiItems[idx].checked = checked;
       renderDepiItems();
     }
@@ -3238,7 +3280,7 @@
   function updateDepiTotal() {
     const items = window._depiItems || [];
     // Only sum non-readonly (pending) items
-    const total = items.filter(i => i.checked && !i.readonly && !i.completado).reduce((sum, i) => sum + Number(i.precio || 0), 0);
+    const total = items.filter(i => i.checked && !i.readonly && !i.completado && !i.bloqueado).reduce((sum, i) => sum + Number(i.precio || 0), 0);
     const el = document.getElementById('takeDepiTotal');
     if (el) el.textContent = '$' + total;
   }
@@ -3247,7 +3289,9 @@
     // La staff hace todo el servicio pendiente — flujo normal
     window._depiItems = (window._depiItems || []).map(i => ({
       ...i,
-      checked: i.readonly || i.completado ? false : true  // no marcar los ya completados
+      // ni los ya completados ni los de otra área (bloqueado): "hago todo" es
+      // "todo LO MÍO", no todo el ticket.
+      checked: (i.readonly || i.completado || i.bloqueado) ? false : true
     }));
     await confirmTake();
   }
@@ -3334,7 +3378,7 @@
       const _esNativo = !!(_tkData && String(_tkData.fuente || '') === 'LineasNativo');
       let _payloadTomar = { idListaEspera: window._takingId, chicaNombre: name };
       if (_esNativo) {
-        const _selNat = (window._depiItems || []).filter(it => it.checked && !it.readonly && !it.completado);
+        const _selNat = (window._depiItems || []).filter(it => it.checked && !it.readonly && !it.completado && !it.bloqueado);
         const _idsNat = _selNat.map(it => String(it.id || '').trim()).filter(Boolean);
         if (!_selNat.length) {
           alert('Elegí al menos un servicio para tomar.');
@@ -3631,7 +3675,7 @@
             // Respaldo: si la atención todavía no refleja mi toma, uso lo que
             // marqué en el modal (los mismos linea_id que acabo de enviar).
             if (!_miasNat1.length && Array.isArray(window._depiItems)) {
-              _miasNat1 = window._depiItems.filter(function (it) { return it.checked && it.id; })
+              _miasNat1 = window._depiItems.filter(function (it) { return it.checked && it.id && !it.bloqueado; })
                 .map(function (it) { return { id: it.id, servicio: it.nombre, monto: it.precio, area: it.area }; });
             }
             if (_miasNat1.length) {
@@ -3998,7 +4042,41 @@
           }
           
           // Si viene con promo asignada, guardarla pero permitir cambiarla
-          if (window._availablePromo) {
+          // ── SP NATIVO · slotServices = SOLO MIS COMPONENTES (SLOT 2) ─────
+          // Espejo exacto del bloque del slot 1. El área de cejas atiende dos
+          // clientas a la vez, así que el segundo puesto necesita el mismo
+          // tratamiento: sin esto, la promo ENTERA se empujaba encima del
+          // componente aceptado y el total quedaba mal, igual que pasaba en el
+          // slot 1 antes de corregirlo.
+          var _atenNat2 = a || window._takingData || null;
+          var _esNat2   = _fuenteEsNativa(_atenNat2) || _fuenteEsNativa(window._takingData);
+          if (_esNat2) {
+            window._as2Aten     = _atenNat2;
+            window._as2EsNativo = true;
+            var _yoNat2 = String((window.currentUser && window.currentUser.name) || '').toLowerCase();
+            var _sdNat2 = Array.isArray(_atenNat2.serviciosDetalle) ? _atenNat2.serviciosDetalle : [];
+            var _miasNat2 = _sdNat2.filter(function (sd) {
+              return String(sd.staff || '').trim().toLowerCase() === _yoNat2
+                  && String(sd.estado || '') !== 'anulado';
+            });
+            if (!_miasNat2.length && Array.isArray(window._depiItems)) {
+              _miasNat2 = window._depiItems.filter(function (it) { return it.checked && it.id && !it.bloqueado; })
+                .map(function (it) { return { id: it.id, servicio: it.nombre, monto: it.precio, area: it.area }; });
+            }
+            if (_miasNat2.length) {
+              slotServices[2] = _miasNat2.map(function (sd) {
+                return { name: sd.servicio || sd.nombre || sd.name,
+                         price: Number(sd.monto || sd.precio || sd.price || 0),
+                         area: sd.area || a.area || '', lineaId: String(sd.id || '') };
+              });
+              var _totNat2 = slotServices[2].reduce(function (x, v) { return x + Number(v.price || 0); }, 0);
+              try { renderServicesForSlot(2); } catch (eR2) {}
+              var _e2t = document.getElementById('as2Total');    if (_e2t) _e2t.textContent = '$' + _totNat2;
+              var _e2c = document.getElementById('as2SvcCount'); if (_e2c) _e2c.textContent = String(slotServices[2].length);
+            }
+            try { updateFinishButtons(2); } catch (eF2) {}
+          }
+          if (window._availablePromo && !_esNat2) {   // LineasNativo NO entra: su slotServices ya se armó arriba
             const promoBasic = window._availablePromo;
             
             // Buscar la promo completa en PROMOS
