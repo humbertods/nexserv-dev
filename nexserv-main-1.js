@@ -686,12 +686,20 @@
     // un nativo y después uno legacy arrastraría el flag y vería la rama nativa
     // sobre un ticket que no lo es.
     var _slotIdx  = slot1 ? 1 : 2;
-    var _refAhora = String(window['_as' + _slotIdx + 'IdEspera'] || '');
-    if (window['_as' + _slotIdx + 'RefFlag'] !== _refAhora) {
-      window['_as' + _slotIdx + 'RefFlag']  = _refAhora;
+    var _refAhora = String(window['_as' + _slotIdx + 'IdEspera'] || '').trim();
+    var _refPrev  = String(window['_as' + _slotIdx + 'RefFlag'] || '').trim();
+    // CONSERVADOR a propósito: solo se resetea cuando hay DOS refs concretas y
+    // distintas, o sea cuando la staff pasó de una clienta a otra de verdad.
+    // Con ref vacía NO se toca nada: al recargar la página, o en las primeras
+    // llamadas antes de que _asNIdEspera se puebla, la ref es '' y un reset ahí
+    // borraba el flag y tiraba el modal nativo a una rama legacy
+    // ("Finalizar servicio"). El flag es monótono: solo lo baja un cambio de
+    // ticket demostrable.
+    if (_refAhora && _refPrev && _refPrev !== _refAhora) {
       window['_as' + _slotIdx + 'EsNativo'] = _fuenteEsNativa(window['_as' + _slotIdx + 'Aten']);
       window['_as' + _slotIdx + 'PintaTok'] = 0;
     }
+    if (_refAhora) window['_as' + _slotIdx + 'RefFlag'] = _refAhora;
     // Token de invocación: cada llamada se numera y solo la ÚLTIMA puede pintar
     // desde una promesa. Sin esto, dos apiPost en vuelo compiten y gana el que
     // resuelve último, que no es necesariamente el que se lanzó último.
