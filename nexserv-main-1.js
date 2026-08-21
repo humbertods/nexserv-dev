@@ -1485,7 +1485,35 @@
           _setNotaRecepcion(1, a1.observaciones);
 
           // Restaurar servicios de la 1ª clienta desde el ticket
-          if (!String(a1.idEspera||'').startsWith('TM-')) {
+          // ── SP NATIVO · SOLO MIS COMPONENTES ─────────────────────────────
+          // La rama de promo de abajo mete la promo ENTERA como un servicio
+          // ("Combo 18 combo full · $40 · Cejas"), que es correcto en legacy
+          // pero falso acá: la staff aceptó K de N componentes y el resto es de
+          // otra. Por eso a Keyla le aparecía su bikini $25 MÁS la promo $40
+          // repetida encima, y "Total actual" daba $40 en vez de $25.
+          // En LineasNativo slotServices se arma con las líneas que son SUYAS
+          // (staff = ella y no anuladas). Mikaela y la hoja ya estaban bien:
+          // esto era solo la pantalla de la staff.
+          var _nativo1 = String(a1.fuente || '') === 'LineasNativo'
+                      && Array.isArray(a1.serviciosDetalle) && a1.serviciosDetalle.length > 0;
+          if (_nativo1) {
+            var _yo1 = String((window.currentUser && window.currentUser.name) || '').toLowerCase();
+            var _mias1 = a1.serviciosDetalle.filter(function (sd) {
+              return String(sd.staff || '').trim().toLowerCase() === _yo1
+                  && String(sd.estado || '') !== 'anulado';
+            });
+            if (_mias1.length) {
+              slotServices[1] = _mias1.map(function (sd) {
+                return { name: sd.servicio || sd.nombre || sd.name,
+                         price: Number(sd.monto || sd.precio || sd.price || 0),
+                         area: sd.area || a1.area || '', lineaId: String(sd.id || '') };
+              });
+            }
+            try { renderServicesForSlot(1); } catch (e1n) {}
+            var _t1n = (slotServices[1] || []).reduce(function (s2, v) { return s2 + Number(v.price || 0); }, 0);
+            var _as1tn = document.getElementById('as1Total'); if (_as1tn) _as1tn.textContent = '$' + _t1n;
+            var _as1scn = document.getElementById('as1SvcCount'); if (_as1scn) _as1scn.textContent = String((slotServices[1] || []).length);
+          } else if (!String(a1.idEspera||'').startsWith('TM-')) {
             if (a1.promoNombre && a1.promoNombre.trim() !== '') {
               // Es una promo → cargar el nombre de la promo en slotServices para que el modal lo muestre
               // Buscar precio: total del ticket → precioRegular → PROMOS cargados
@@ -1528,7 +1556,23 @@
               pintarNombre('as2Name', a2.nombre, a2.codigo, a2.esTop);
               const _as2cd = document.getElementById('as2Code'); if (_as2cd) _as2cd.textContent = a2.codigo + (a2.horaLlegada ? ' · Llegó ' + a2.horaLlegada : '');
               // Cargar servicios de la 2ª clienta si vienen del ticket
-              if (a2.promoNombre && a2.promoNombre.trim() !== '') {
+              // SP NATIVO · solo mis componentes (ver nota en el slot 1)
+              var _nativo2 = String(a2.fuente || '') === 'LineasNativo'
+                          && Array.isArray(a2.serviciosDetalle) && a2.serviciosDetalle.length > 0;
+              if (_nativo2) {
+                var _yo2 = String((window.currentUser && window.currentUser.name) || '').toLowerCase();
+                var _mias2 = a2.serviciosDetalle.filter(function (sd) {
+                  return String(sd.staff || '').trim().toLowerCase() === _yo2
+                      && String(sd.estado || '') !== 'anulado';
+                });
+                if (_mias2.length) {
+                  slotServices[2] = _mias2.map(function (sd) {
+                    return { name: sd.servicio || sd.name,
+                             price: Number(sd.monto || sd.price || 0),
+                             area: sd.area || a2.area || '', lineaId: String(sd.id || '') };
+                  });
+                }
+              } else if (a2.promoNombre && a2.promoNombre.trim() !== '') {
                 slotServices[2] = [{ name: a2.promoNombre, price: Number(a2.total || 0), area: a2.area || '', status: 'aprobado', isPromo: true }];
               } else if (a2.serviciosDetalle && a2.serviciosDetalle.length > 0) {
                 slotServices[2] = a2.serviciosDetalle.map(function(sd){ return { name: sd.servicio || sd.name, price: Number(sd.monto || sd.price || 0), area: sd.area || '' }; });
