@@ -4760,6 +4760,22 @@
   }
 
   function showConfirmServiceModal(slot) {
+    // ── SP NATIVO · SIN SEGUNDA CONFIRMACIÓN ─────────────────────────────────
+    // En un ticket LineasNativo la staff YA eligió qué componentes hace, en el
+    // modal "¿Tomar esta clienta?" (que es la confirmación buena y la única que
+    // debe existir). Este modal es el legacy de promo: vuelve a preguntar
+    // "Confirmar / Cambiar / Cancelar servicio" sobre la promo COMPLETA, y por
+    // eso reaparecían los 3 componentes cuando la staff solo aceptó 2 — la
+    // segunda confirmación contradice la selección que ella acaba de hacer.
+    // El ticket ya está tomado y las líneas escritas: no hay nada que confirmar.
+    try {
+      const _atenCS = (slot === 1) ? (window._as1Aten || null) : (window._as2Aten || null);
+      if (_atenCS && String(_atenCS.fuente || '') === 'LineasNativo') {
+        const _m = document.getElementById('confirmServiceModal');
+        if (_m) _m.classList.remove('active');
+        return;
+      }
+    } catch (eCS) {}
     const slotStr = String(slot);
     const clientName = document.getElementById('as' + slotStr + 'Name')?.textContent?.replace(' ⭐','') || '';
     const svcs = slotServices[slot] || [];
