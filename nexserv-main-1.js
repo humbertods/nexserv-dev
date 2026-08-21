@@ -1300,7 +1300,12 @@
       if (idEspera.startsWith('TM-')) return; // TM se restaura por otra ruta
       const clientName = document.getElementById('as' + slot + 'Name')?.textContent?.replace(' ⭐', '') || '';
       const clientKey = normalizeClientKey(clientName);
-      if (activePromos[clientKey]) return; // promo se restaura por otra ruta
+      // NO se corta acá por activePromos: en un ticket nativo la promo queda
+      // registrada igual (loadClientAfterTake la guarda), y cortar dejaría el
+      // slot vacío en cada recarga. La decisión se toma abajo, ya con la
+      // atención en mano y sabiendo si es LINEAS. Para legacy el corte se
+      // mantiene idéntico.
+      const _hayPromoActiva = !!activePromos[clientKey];
       const res = await apiGet('getAtenciones', { chica: user.name });
       if (!res.success || !res.atenciones || !res.atenciones.length) return;
       // Localizar la atención de este slot (por idEspera, por código, o por orden)
@@ -1311,7 +1316,48 @@
         if (code) a = res.atenciones.find(x => x.codigo === code);
       }
       if (!a) a = res.atenciones[slot === 1 ? 0 : 1];
-      if (!a || a.promoNombre) return; // promo → otra ruta
+      if (!a) return;
+
+      // ── SP NATIVO · RECONSTRUCCIÓN EN RECARGA ────────────────────────────
+      // Flujo de RECARGA (F5 / show('activeService') con slotServices vacío).
+      // Distinto del flujo de toma, que ya se resuelve en loadClientAfterTake.
+      // Sin esto, router.js:190 ve el slot vacío y dispara el fallback legacy
+      // que inyecta la promo ENTERA ($40 · Cejas) y pisa el total.
+      //
+      // Se detecta por a.fuenteReal === 'LINEAS' (canónico, resuelto por el
+      // backend vía TicketsFuente — getAtenciones lo expone). NO se usa el
+      // prefijo del idEspera ni a.fuente. Tampoco se toca
+      // _asNFuenteCanonica: eso es otra fase, con su propio gate, porque
+      // poblarla reactiva applyPromoFromAddSvc para tickets legacy.
+      //
+      // Se reconstruye SOLO con mis componentes (staff = yo, no anulados) y
+      // conservando lineaId, que es la identidad que necesitan los botones
+      // de decisión post-parte.
+      var _fcRest = String(a.fuenteReal || '').toUpperCase();
+      if (_fcRest === 'LINEAS' && Array.isArray(a.serviciosDetalle) && a.serviciosDetalle.length) {
+        var _yoRest = String(user.name || '').trim().toLowerCase();
+        var _miasRest = a.serviciosDetalle.filter(function (sd) {
+          return String(sd.staff || '').trim().toLowerCase() === _yoRest
+              && String(sd.estado || '') !== 'anulado';
+        });
+        if (!_miasRest.length) return;   // nada mío activo: no inventar filas
+        slotServices[slot] = _miasRest.map(function (sd) {
+          return { name: sd.servicio || sd.nombre || sd.name || '',
+                   price: Number(sd.monto || sd.precio || sd.price || 0),
+                   area: sd.area || a.area || '',
+                   lineaId: String(sd.id || sd.lineaId || '') };
+        });
+        renderServicesForSlot(slot);
+        var _totRest = slotServices[slot].reduce(function (x, v) { return x + Number(v.price || 0); }, 0);
+        var _tR = document.getElementById('as' + slot + 'Total');    if (_tR) _tR.textContent = '$' + _totRest;
+        var _cR = document.getElementById('as' + slot + 'SvcCount'); if (_cR) _cR.textContent = String(slotServices[slot].length);
+        updateFinishButtons(slot);
+        return;
+      }
+
+      // Legacy: comportamiento original intacto — promo por otra ruta.
+      if (_hayPromoActiva) return;
+      if (a.promoNombre) return;
       if (a.serviciosDetalle && a.serviciosDetalle.length > 0) {
         slotServices[slot] = a.serviciosDetalle.map(sd => ({
           name: sd.servicio || sd.nombre || sd.name || '',
@@ -3495,8 +3541,47 @@
             if (activePromos[clientKeyClean]) delete activePromos[clientKeyClean];
           }
           
+          // ── SP NATIVO · slotServices = SOLO MIS COMPONENTES ──────────────
+          // Este es el camino de TOMAR (loadStaffHome ya estaba cubierto). Sin
+          // esto, el bloque de promo de abajo hace push de la promo ENTERA
+          // ("Combo 18 combo full · $40") encima del componente que la staff sí
+          // aceptó, y "Total actual" queda en $40 en vez de $25.
+          // También se sella acá el contexto del slot: updateFinishButtons y
+          // showConfirmServiceModal leen _as1Aten/_as1EsNativo, y en este camino
+          // quedaban sin poblar — por eso la rama nativa no se activaba y no
+          // salían los 4 botones.
+          var _atenNat1 = a || window._takingData || null;
+          var _esNat1   = !!(_atenNat1 && String(_atenNat1.fuente || '') === 'LineasNativo');
+          if (_esNat1) {
+            window._as1Aten     = _atenNat1;
+            window._as1EsNativo = true;
+            var _yoNat1 = String((window.currentUser && window.currentUser.name) || '').toLowerCase();
+            var _sdNat1 = Array.isArray(_atenNat1.serviciosDetalle) ? _atenNat1.serviciosDetalle : [];
+            var _miasNat1 = _sdNat1.filter(function (sd) {
+              return String(sd.staff || '').trim().toLowerCase() === _yoNat1
+                  && String(sd.estado || '') !== 'anulado';
+            });
+            // Respaldo: si la atención todavía no refleja mi toma, uso lo que
+            // marqué en el modal (los mismos linea_id que acabo de enviar).
+            if (!_miasNat1.length && Array.isArray(window._depiItems)) {
+              _miasNat1 = window._depiItems.filter(function (it) { return it.checked && it.id; })
+                .map(function (it) { return { id: it.id, servicio: it.nombre, monto: it.precio, area: it.area }; });
+            }
+            if (_miasNat1.length) {
+              slotServices[1] = _miasNat1.map(function (sd) {
+                return { name: sd.servicio || sd.nombre || sd.name,
+                         price: Number(sd.monto || sd.precio || sd.price || 0),
+                         area: sd.area || a.area || '', lineaId: String(sd.id || '') };
+              });
+              var _totNat1 = slotServices[1].reduce(function (x, v) { return x + Number(v.price || 0); }, 0);
+              try { renderServicesForSlot(1); } catch (eR1) {}
+              var _e1t = document.getElementById('as1Total');    if (_e1t) _e1t.textContent = '$' + _totNat1;
+              var _e1c = document.getElementById('as1SvcCount'); if (_e1c) _e1c.textContent = String(slotServices[1].length);
+            }
+            try { updateFinishButtons(); } catch (eF1) {}
+          }
           // Si viene con promo asignada, guardarla pero permitir cambiarla
-          if (window._availablePromo) {
+          if (window._availablePromo && !_esNat1) {   // LineasNativo NO entra: su slotServices ya se armó arriba
             const promoBasic = window._availablePromo;
             
             // Buscar la promo completa en PROMOS
