@@ -745,6 +745,12 @@
       // pregunta al servidor con siguientePendienteBloque, que resuelve dentro
       // del MISMO ticket_ref y nunca cruza de bloque.
       // Async como la rama TM: se pinta un placeholder y se reemplaza al volver.
+      // NOTA · "Devolver a central" NO se pinta acá. Es el botón estático de
+      // index.html (#as1DevolverBtn / #as2DevolverBtn), que ya llama a
+      // devolverALista(slot) y quedó renombrado de "Devolver a lista" a
+      // "Devolver a central". Pintarlo también desde esta rama dejaba DOS
+      // botones con el mismo texto y comportamiento distinto en la misma
+      // pantalla, imposibles de distinguir para la staff.
       btnContainer.innerHTML = '<div style="padding:14px;text-align:center;font-size:12px;color:var(--ink-faint);">Cargando opciones…</div>';
       const _lineaActual = _miasNat.length ? String(_miasNat[_miasNat.length - 1].id) : '';
       apiPost('siguientePendienteBloque', { ticketRef: _refNat, lineaActualId: _lineaActual })
@@ -758,9 +764,7 @@
             btnContainer.innerHTML =
               '<button class="btn-primary" style="margin-bottom:10px;background:var(--success);font-size:14px;padding:16px;"'
               + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarMandarCentral(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
-              + '&#9989; Termin&eacute; &mdash; mandar a central</button>'
-              + '<button style="margin-bottom:10px;width:100%;padding:14px;background:#fff;border:1.5px solid var(--line);border-radius:var(--radius-pill);font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;color:var(--danger);"'
-              + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
+              + '&#9989; Termin&eacute; &mdash; mandar a central</button>';
             return;
           }
           btnContainer.innerHTML =
@@ -773,8 +777,7 @@
             + '<button style="margin-bottom:8px;width:100%;padding:14px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
             + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarYCancelar(\'' + _esc(_refNat) + '\',' + _idsMias + ',\'' + _sigLbl + '\')">'
             + '&#9989; Termin&eacute; todo &mdash; la clienta se retira, mandar a central</button>'
-            + '<button style="margin-bottom:10px;width:100%;padding:14px;background:#fff;border:1.5px solid var(--line);border-radius:var(--radius-pill);font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;color:var(--danger);"'
-            + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
+;
         })
         .catch(function () {
           if (window['_as' + _slotIdx + 'PintaTok'] !== _pintaTok) return;
@@ -784,8 +787,7 @@
             '<button class="btn-primary" style="margin-bottom:10px;background:var(--success);font-size:14px;padding:16px;"'
             + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarMandarCentral(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
             + '&#9989; Termin&eacute; &mdash; mandar a central</button>'
-            + '<button style="margin-bottom:10px;width:100%;padding:14px;background:#fff;border:1.5px solid var(--line);border-radius:var(--radius-pill);font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;color:var(--danger);"'
-            + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
+;
         });
       return;
     }
