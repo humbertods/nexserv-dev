@@ -733,10 +733,23 @@
       // handleGetAtenciones filtra por staff (AppsScript:5006), así que
       // serviciosDetalle SOLO trae mis líneas. Es correcto para esto.
       const _compsNat = Array.isArray(_atenSlot.serviciosDetalle) ? _atenSlot.serviciosDetalle : [];
-      const _miasNat = _compsNat.filter(c =>
+      let _miasNat = _compsNat.filter(c =>
         String(c.estado || '') === 'en_servicio'
         && String(c.staff || '').trim().toLowerCase() === _yoNat.toLowerCase()
         && String(c.id || '').trim());
+      // RESPALDO · slotServices ya tiene MIS componentes con su lineaId (lo
+      // arman los bloques nativos de loadClientAfterTake y loadStaffHome).
+      // _as1Aten puede venir de una lectura previa a que la toma se reflejara,
+      // o con el estado todavía sin actualizar — y ahí _miasNat quedaba vacío,
+      // los botones se pintaban con lineaIds:[] y al pulsarlos saltaba
+      // "No tenés servicios en curso para finalizar en este ticket".
+      // slotServices es lo que la staff está viendo en pantalla: si hay algo
+      // ahí, eso es lo suyo.
+      if (!_miasNat.length) {
+        _miasNat = (slotServices[_slotN] || [])
+          .filter(function (sv) { return String(sv.lineaId || '').trim(); })
+          .map(function (sv) { return { id: String(sv.lineaId).trim(), servicio: sv.name }; });
+      }
       const _idsMias = JSON.stringify(_miasNat.map(c => String(c.id)));
       const _esc = v => String(v || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
