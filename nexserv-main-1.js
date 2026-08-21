@@ -689,6 +689,69 @@
     // ── TICKET MULTI ─────────────────────────────────────────
     const _idEsperaSlot = slot1 ? (window._as1IdEspera || '') : (window._as2IdEspera || '');
 
+    // ── SP NATIVO (fuente LINEAS) ────────────────────────────────────────────
+    // Va ANTES de la rama SP- legacy: un ticket nativo comparte prefijo 'SP-'
+    // pero su verdad está en LINEAS, no en la hoja ServicioPromo. Decidir por
+    // prefijo lo mandaría al flujo viejo, que reparte por ÁREA — inservible en
+    // una promo cuyos 3 componentes son de la misma área (caso SP-0305).
+    //
+    // Regla de aparición: 2+ componentes y al menos 1 pendiente → 4 botones.
+    // Sin pendientes → un solo botón "Terminé — mandar a central".
+    // "Central" = lista de espera. La staff NUNCA manda a cobro: eso lo decide
+    // la admin. Por eso ningún botón de acá dice "cobro".
+    const _atenSlot = slot1 ? (window._as1Aten || null) : (window._as2Aten || null);
+    if (_atenSlot && String(_atenSlot.fuente || '') === 'LineasNativo'
+        && Array.isArray(_atenSlot.serviciosDetalle) && _atenSlot.serviciosDetalle.length > 1) {
+      const _slotN  = slot1 ? 1 : 2;
+      const _refNat = String(_atenSlot.idEspera || _idEsperaSlot || '');
+      const _yoNat  = String(user?.name || '');
+      const _compsNat = _atenSlot.serviciosDetalle;
+
+      // Mías EN CURSO = las que voy a finalizar con cualquiera de las decisiones.
+      const _miasNat = _compsNat.filter(c =>
+        String(c.estado || '') === 'en_servicio'
+        && String(c.staff || '').trim().toLowerCase() === _yoNat.toLowerCase()
+        && String(c.id || '').trim());
+      // Pendiente = esperando y sin staff. El orden es el que manda el backend
+      // (componentes[] de getTicketPromoNativoParaEspera_), no el del DOM.
+      const _pendNat = _compsNat.filter(c =>
+        String(c.estado || '') === 'esperando' && !String(c.staff || '').trim()
+        && String(c.id || '').trim());
+      const _sigNat = _pendNat.length ? _pendNat[0] : null;
+      const _idsMias = JSON.stringify(_miasNat.map(c => String(c.id)));
+      const _esc = s => String(s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+
+      if (!_sigNat) {
+        // Nada pendiente: la staff cierra su parte y el ticket va a central.
+        btnContainer.innerHTML =
+          '<button class="btn-primary" style="margin-bottom:10px;background:var(--success);font-size:14px;padding:16px;"'
+          + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarMandarCentral(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
+          + '✅ Terminé — mandar a central</button>'
+          + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
+          + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
+        return;
+      }
+
+      const _lblSig = _esc(_sigNat.servicio);
+      btnContainer.innerHTML =
+        // 1 · sigo yo — el siguiente pendiente pasa a mí. Conservo el ticket.
+          '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--ink);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
+        + ' onclick="window._finishingSlot=' + _slotN + '; nativoYoSigo(\'' + _esc(_refNat) + '\',\'' + _esc(_sigNat.id) + '\')">'
+        + 'Yo sigo: ' + _lblSig + '</button>'
+        // 2 · congelo lo mío y cedo el resto a central para otra staff.
+        + '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--accent);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
+        + ' onclick="window._finishingSlot=' + _slotN + '; nativoPasarOtraStaff(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
+        + 'Ya terminé mi parte — enviar a central para la siguiente staff</button>'
+        // 3 · la clienta se retira: cierro lo mío y se ANULA lo pendiente.
+        + '<button style="margin-bottom:8px;width:100%;padding:14px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
+        + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarYCancelar(\'' + _esc(_refNat) + '\',' + _idsMias + ',\'' + _lblSig + '\')">'
+        + '✅ Terminé todo — la clienta se retira, mandar a central</button>'
+        // 4 · devolver el ticket a central sin cerrar nada.
+        + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
+        + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
+      return;
+    }
+
     // SP- con promo → si hay servicios de OTRA área en el slot, ofrecer pasarlos a otra staff
     if (_idEsperaSlot.startsWith('SP-')) {
       const _slotSP = slot1 ? 1 : 2;
@@ -1406,6 +1469,10 @@
           const a1 = aten[0];
           window._as1Client = a1.codigo;
           window._as1IdEspera = a1.idEspera || ''; // ID del ticket LE-XXXX
+          // G2 · la atención completa se conserva por slot: updateFinishButtons
+          // necesita fuente y serviciosDetalle (con linea_id) para decidir el
+          // modal nativo. Antes solo se guardaba el idEspera y esa info se perdía.
+          window._as1Aten = a1;
           const initials1 = (a1.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av = document.getElementById('as1Avatar');
           if (_as1av) { _as1av.textContent = initials1; _as1av.className = 'client-avatar' + (a1.esTop ? ' is-top' : ''); }
@@ -1452,6 +1519,7 @@
               const a2 = aten[1];
               window._as2Client = a2.codigo;
               window._as2IdEspera = a2.idEspera || ''; // ID del ticket de la 2ª clienta
+              window._as2Aten = a2;   // G2 · ver nota en slot 1
               activeClients[user.name].push({ name: a2.nombre, code: a2.codigo, service: a2.servicio });
               const initials2 = a2.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
               const _as2av = document.getElementById('as2Avatar'); if (_as2av) _as2av.textContent = initials2;
@@ -1473,6 +1541,7 @@
               // No hay 2ª clienta → limpiar slot 2 para no arrastrar datos de una sesión anterior
               window._as2Client = '';
               window._as2IdEspera = '';
+              window._as2Aten = null;
               slotServices[2] = [];
               const _as2nm = document.getElementById('as2Name'); if (_as2nm) _as2nm.textContent = '';
               const _as2cd2 = document.getElementById('as2Code'); if (_as2cd2) _as2cd2.textContent = '';
