@@ -750,7 +750,13 @@
           .filter(function (sv) { return String(sv.lineaId || '').trim(); })
           .map(function (sv) { return { id: String(sv.lineaId).trim(), servicio: sv.name }; });
       }
-      const _idsMias = JSON.stringify(_miasNat.map(c => String(c.id)));
+      // JSON.stringify usa comillas DOBLES, y el onclick del botón también va
+      // entre comillas dobles: ["L-1505"] cerraba el atributo en la primera
+      // comilla y el handler quedaba truncado → "Uncaught SyntaxError:
+      // Unexpected end of input" y el botón no hacía nada. Se escapan a &quot;
+      // para que el navegador las devuelva como comillas al parsear el JS.
+      // El botón 1 no fallaba porque solo pasa strings entre comillas simples.
+      const _idsMias = JSON.stringify(_miasNat.map(c => String(c.id))).replace(/"/g, '&quot;');
       const _esc = v => String(v || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
       // Los PENDIENTES del ticket NO viajan en mi atención: son líneas de otra
