@@ -44,8 +44,23 @@
           clearInterval(window._staffHomeRefresh); window._staffHomeRefresh = null; return;
         }
         if (document.hidden || document.querySelector('.modal-bg.active') || window._staffHomeLoading || window._staffAssignmentsRefreshPromise) return;
-        try { await refrescarAsignacionesStaff(); } catch (e) { console.warn('[staffHomeRefresh]', e); }
-      }, 2000);
+        // FIX · refrescarAsignacionesStaff NUNCA EXISTIÓ en ningún archivo: el
+        // intervalo lanzaba ReferenceError en cada disparo (tragado por el catch
+        // como console.warn) y el panel de la staff no se refrescaba solo desde
+        // que se escribió este bloque. La cola universal real es
+        // refreshStaffQueue (nexserv-main-1.js:2612): ya es la versión liviana
+        // que describe el comentario de arriba, y trae caché por
+        // STAFF_QUEUE_FRESCA_MS + dedup por inFlight, así que el intervalo no
+        // apila requests aunque coincida con otra lectura en curso.
+        // typeof: router.js puede evaluarse antes que nexserv-main-1.js.
+        // Nota: window._staffAssignmentsRefreshPromise (guarda de la línea de
+        // arriba) tampoco se asigna en ningún lado — pertenecía a la misma
+        // función que nunca se escribió. Se deja intacta: con el inFlight de
+        // refreshStaffQueue el solapamiento ya está cubierto.
+        try {
+          if (typeof refreshStaffQueue === 'function') await refreshStaffQueue('staffHomeRefresh');
+        } catch (e) { console.warn('[staffHomeRefresh]', e); }
+      }, 4000);
     } else if (window._staffHomeRefresh) {
       clearInterval(window._staffHomeRefresh); window._staffHomeRefresh = null;
     }
