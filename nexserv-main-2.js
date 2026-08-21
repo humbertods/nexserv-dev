@@ -3993,15 +3993,42 @@
               const badgeLabel = esPendConf ? '⏳ CONFIRMANDO' : 'EN CURSO';
               // Ticket madre con varios subtickets → listar cada servicio en su
               // renglón (antes se concatenaban en una sola línea: "A + B + C + D").
+              // ── D · BADGE POR COMPONENTE (LineasNativo) ────────────────────
+              // El badge de la derecha describe la TARJETA entera. En una promo
+              // parcial eso es falso: con 2 componentes tomados y 1 pendiente,
+              // los tres se pintaban "EN CURSO". serviciosDetalle YA trae
+              // estado y staff por componente (AppsScript:555) — solo había que
+              // usarlos. Cada renglón muestra su propio estado real.
+              const _badgeComp = function (d) {
+                const _e = String(d.estado || '');
+                const _s = String(d.staff || '').trim();
+                if (_e === 'en_servicio')                return { txt: 'EN CURSO',  bg: 'var(--info-bg)',    fg: 'var(--info)' };
+                if (_e === 'completado' || _e === 'por_verificar')
+                                                         return { txt: 'LISTO',     bg: 'var(--success-bg)', fg: 'var(--success)' };
+                if (_e === 'cobrado')                    return { txt: 'COBRADO',   bg: 'var(--success-bg)', fg: 'var(--success)' };
+                if (_e === 'anulado')                    return { txt: 'ANULADO',   bg: 'var(--bg)',         fg: 'var(--ink-faint)' };
+                if (_e === 'esperando' && !_s)           return { txt: 'PENDIENTE', bg: '#fff8e1',           fg: 'var(--warning, #f59e0b)' };
+                return { txt: 'ESPERA', bg: 'var(--bg)', fg: 'var(--ink-faint)' };
+              };
+              const _esNativoTL = String(a.fuente || '') === 'LineasNativo';
               const _subticketsHTML = (a.serviciosDetalle && a.serviciosDetalle.length > 1)
-                ? a.serviciosDetalle.map(d => `<div style="font-size:11px;color:var(--ink-soft);">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong></div>`).join('')
+                ? a.serviciosDetalle.map(d => {
+                    if (!_esNativoTL) {
+                      return `<div style="font-size:11px;color:var(--ink-soft);">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong></div>`;
+                    }
+                    const _b = _badgeComp(d);
+                    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">`
+                      + `<div style="font-size:11px;color:var(--ink-soft);flex:1;">• ${d.servicio} · <strong>$${Number(d.monto||0)}</strong></div>`
+                      + `<div style="font-size:9px;font-weight:700;background:${_b.bg};color:${_b.fg};padding:2px 7px;border-radius:100px;flex-shrink:0;">${_b.txt}</div>`
+                      + `</div>`;
+                  }).join('')
                 : `<div style="font-size:11px;color:var(--ink-soft);">${servicioLimpio}</div>`;
               timelineHTML += `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;">
                 <div style="width:28px;height:28px;border-radius:50%;background:${badgeBg};border:2px solid ${badgeColor};display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;animation:pulse 2s infinite;">${iconActual}</div>
                 <div style="flex:1;"><div style="font-size:12px;font-weight:800;color:${badgeColor};">${labelActual} · ${a.tomadaPor}</div>
                 ${_subticketsHTML}
                 <div style="font-size:10px;color:var(--ink-faint);">Desde ${a.horaToma || '?'}${esPendConf?' · Esperando confirmación':''}</div></div>
-                <div style="font-size:10px;font-weight:700;background:${badgeBg};color:${badgeColor};padding:3px 8px;border-radius:100px;animation:pulse 2s infinite;">${badgeLabel}</div></div>`;
+                ${(_esNativoTL && a.serviciosDetalle && a.serviciosDetalle.length > 1) ? '' : `<div style="font-size:10px;font-weight:700;background:${badgeBg};color:${badgeColor};padding:3px 8px;border-radius:100px;animation:pulse 2s infinite;">${badgeLabel}</div>`}</div>`;
               if (a.promoNombre) {
                 const promoFull = (PROMOS || []).find(p => p.name === a.promoNombre);
                 if (promoFull && promoFull.division) {
@@ -4041,6 +4068,26 @@
                   totalAcumDisplay = Math.max(totalAcumDisplay, totalDetalle + Number(a.total || 0));
                 }
               }
+            }
+            // ── B · TOTAL ACUMULADO EN PROMO PARCIAL (LineasNativo) ──────────
+            // El cálculo de arriba nació para promos legacy y da mal en el caso
+            // parcial: con a.total=40 (suma de los 3 componentes) y detalle=40,
+            // la rama sin promo fija hacía 40+40=80. Y aun acertando la rama de
+            // precio fijo daría 40 — tampoco es lo correcto, porque la staff
+            // solo aceptó 2 de los 3 componentes.
+            // Contrato: el acumulado es la suma de los componentes que ALGUIEN
+            // está atendiendo o ya atendió (staff asignada). Los pendientes sin
+            // staff todavía no son plata de nadie y no se acumulan. En el caso
+            // real SP-0305: axilas $5 + media pierna $10 = $15 (bikini $25 queda
+            // fuera hasta que Central lo asigne).
+            // Solo display: totalAcumDisplay no viaja a ningún POST; el cobro
+            // sale de getLineasParaCobro en backend.
+            if (String(a.fuente || '') === 'LineasNativo'
+                && Array.isArray(a.serviciosDetalle) && a.serviciosDetalle.length) {
+              const _compTomados = a.serviciosDetalle.filter(function (d) {
+                return String(d.staff || '').trim() && String(d.estado || '') !== 'anulado';
+              });
+              totalAcumDisplay = _compTomados.reduce(function (s, d) { return s + Number(d.monto || 0); }, 0);
             }
             const totalStr = totalAcumDisplay > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);"><span style="font-size:11px;color:var(--ink-faint);font-weight:600;">TOTAL ACUMULADO</span><span style="font-size:16px;font-weight:800;color:var(--accent-deep);">$${totalAcumDisplay.toFixed(2)}</span></div>` : '';
             const tmBadge = esTM ? ' <span style="font-size:10px;background:var(--accent);color:white;padding:2px 8px;border-radius:100px;font-weight:700;">MULTI</span>' : '';
