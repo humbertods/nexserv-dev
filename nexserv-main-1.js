@@ -700,55 +700,64 @@
     // "Central" = lista de espera. La staff NUNCA manda a cobro: eso lo decide
     // la admin. Por eso ningún botón de acá dice "cobro".
     const _atenSlot = (slot1 ? window._as1Aten : window._as2Aten) || window._takingData || null;
-    if (_esSlotNativoLineas(slot1 ? 1 : 2) && _atenSlot
-        && Array.isArray(_atenSlot.serviciosDetalle) && _atenSlot.serviciosDetalle.length > 1) {
+    if (_esSlotNativoLineas(slot1 ? 1 : 2) && _atenSlot) {
       const _slotN  = slot1 ? 1 : 2;
       const _refNat = String(_atenSlot.idEspera || _idEsperaSlot || '');
       const _yoNat  = String(user?.name || '');
-      const _compsNat = _atenSlot.serviciosDetalle;
-
-      // Mías EN CURSO = las que voy a finalizar con cualquiera de las decisiones.
+      // MÍAS = lo que voy a finalizar con cualquiera de las decisiones.
+      // handleGetAtenciones filtra por staff (AppsScript:5006), así que
+      // serviciosDetalle SOLO trae mis líneas. Es correcto para esto.
+      const _compsNat = Array.isArray(_atenSlot.serviciosDetalle) ? _atenSlot.serviciosDetalle : [];
       const _miasNat = _compsNat.filter(c =>
         String(c.estado || '') === 'en_servicio'
         && String(c.staff || '').trim().toLowerCase() === _yoNat.toLowerCase()
         && String(c.id || '').trim());
-      // Pendiente = esperando y sin staff. El orden es el que manda el backend
-      // (componentes[] de getTicketPromoNativoParaEspera_), no el del DOM.
-      const _pendNat = _compsNat.filter(c =>
-        String(c.estado || '') === 'esperando' && !String(c.staff || '').trim()
-        && String(c.id || '').trim());
-      const _sigNat = _pendNat.length ? _pendNat[0] : null;
       const _idsMias = JSON.stringify(_miasNat.map(c => String(c.id)));
-      const _esc = s => String(s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      const _esc = v => String(v || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
-      if (!_sigNat) {
-        // Nada pendiente: la staff cierra su parte y el ticket va a central.
-        btnContainer.innerHTML =
-          '<button class="btn-primary" style="margin-bottom:10px;background:var(--success);font-size:14px;padding:16px;"'
-          + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarMandarCentral(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
-          + '✅ Terminé — mandar a central</button>'
-          + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
-          + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
-        return;
-      }
-
-      const _lblSig = _esc(_sigNat.servicio);
-      btnContainer.innerHTML =
-        // 1 · sigo yo — el siguiente pendiente pasa a mí. Conservo el ticket.
-          '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--ink);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
-        + ' onclick="window._finishingSlot=' + _slotN + '; nativoYoSigo(\'' + _esc(_refNat) + '\',\'' + _esc(_sigNat.id) + '\')">'
-        + 'Yo sigo: ' + _lblSig + '</button>'
-        // 2 · congelo lo mío y cedo el resto a central para otra staff.
-        + '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--accent);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
-        + ' onclick="window._finishingSlot=' + _slotN + '; nativoPasarOtraStaff(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
-        + 'Ya terminé mi parte — enviar a central para la siguiente staff</button>'
-        // 3 · la clienta se retira: cierro lo mío y se ANULA lo pendiente.
-        + '<button style="margin-bottom:8px;width:100%;padding:14px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
-        + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarYCancelar(\'' + _esc(_refNat) + '\',' + _idsMias + ',\'' + _lblSig + '\')">'
-        + '✅ Terminé todo — la clienta se retira, mandar a central</button>'
-        // 4 · devolver el ticket a central sin cerrar nada.
-        + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
-        + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
+      // Los PENDIENTES del ticket NO viajan en mi atención: son líneas de otra
+      // staff (o sin staff) y el backend me las filtra. Por eso el siguiente se
+      // pregunta al servidor con siguientePendienteBloque, que resuelve dentro
+      // del MISMO ticket_ref y nunca cruza de bloque.
+      // Async como la rama TM: se pinta un placeholder y se reemplaza al volver.
+      btnContainer.innerHTML = '<div style="padding:14px;text-align:center;font-size:12px;color:var(--ink-faint);">Cargando opciones…</div>';
+      const _lineaActual = _miasNat.length ? String(_miasNat[_miasNat.length - 1].id) : '';
+      apiPost('siguientePendienteBloque', { ticketRef: _refNat, lineaActualId: _lineaActual })
+        .then(function (r) {
+          const _sigId  = (r && r.success && r.linea_id) ? String(r.linea_id) : '';
+          const _sigLbl = _esc((r && r.servicio) || (r && r.componente_seq) || 'siguiente servicio');
+          if (!_sigId) {
+            btnContainer.innerHTML =
+              '<button class="btn-primary" style="margin-bottom:10px;background:var(--success);font-size:14px;padding:16px;"'
+              + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarMandarCentral(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
+              + '&#9989; Termin&eacute; &mdash; mandar a central</button>'
+              + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
+              + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
+            return;
+          }
+          btnContainer.innerHTML =
+              '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--ink);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
+            + ' onclick="window._finishingSlot=' + _slotN + '; nativoYoSigo(\'' + _esc(_refNat) + '\',\'' + _esc(_sigId) + '\')">'
+            + 'Yo sigo: ' + _sigLbl + '</button>'
+            + '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--accent);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
+            + ' onclick="window._finishingSlot=' + _slotN + '; nativoPasarOtraStaff(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
+            + 'Ya termin&eacute; mi parte &mdash; enviar a central para la siguiente staff</button>'
+            + '<button style="margin-bottom:8px;width:100%;padding:14px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
+            + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarYCancelar(\'' + _esc(_refNat) + '\',' + _idsMias + ',\'' + _sigLbl + '\')">'
+            + '&#9989; Termin&eacute; todo &mdash; la clienta se retira, mandar a central</button>'
+            + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
+            + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
+        })
+        .catch(function () {
+          // Fail-safe: si no se pudo consultar el siguiente, NO se ofrecen las
+          // acciones destructivas. Solo cerrar mi parte o devolver.
+          btnContainer.innerHTML =
+            '<button class="btn-primary" style="margin-bottom:10px;background:var(--success);font-size:14px;padding:16px;"'
+            + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarMandarCentral(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
+            + '&#9989; Termin&eacute; &mdash; mandar a central</button>'
+            + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
+            + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
+        });
       return;
     }
 
