@@ -3712,6 +3712,15 @@
                 : '<strong style="color:var(--success);">Mandar a cobro</strong> <span style="color:var(--ink-soft);">· servicios completados</span>';
             } else if (estaAsignada) {
               estadoLabel = '<strong style="color:var(--accent-deep);">Asignada</strong> a ' + w.tomadaPor;
+            } else if (String(w.asignadaA || '').trim()) {
+              // C3 — asignación directa de Central: el ticket fue OFRECIDO a esta
+              // staff (TicketsFuente.destinataria) pero ella todavía no confirmó
+              // qué componentes acepta, así que ninguna línea tiene staff y
+              // tomadaPor viene vacío. Antes caía en "Por asignar", que es falso:
+              // ya está asignada, falta que ella tome.
+              estadoLabel = '<strong style="color:var(--accent-deep);">Asignada</strong> a '
+                + String(w.asignadaA).trim()
+                + ' <span style="color:var(--ink-soft);">· asignación directa</span>';
             } else {
               estadoLabel = '<strong style="color:var(--ink-soft);">Por asignar</strong>';
             }
@@ -3760,9 +3769,23 @@
             // exactamente el mismo que valida reasignarComponenteNativoPorLineaId_.
             // areaKey: se deriva del ÁREA del componente (autoridad de LINEAS), no
             // del texto combinado area+servicio+obs de _pendKey.
-            const _compsPend = (_fuente === 'LineasNativo' && Array.isArray(w.serviciosDetalle))
+            // ── C3 — la oferta viva OCULTA el reasignador ─────────────────────
+            // Mientras Central mantiene el ticket OFRECIDO a una staff
+            // (TicketsFuente.destinataria viva), los componentes pendientes NO
+            // se ofrecen a nadie más: esa staff conserva el control operativo y
+            // puede elegir "Yo sigo". Mostrar tres "Elegí staff…" en ese momento
+            // invita a una acción incorrecta.
+            // Proxy sin cambio de backend: w.asignadaA ya resuelve
+            // _repr.staff || TicketsFuente.destinataria (PLAN A · A5). Vacío =
+            // nadie tiene el ticket = el pendiente fue realmente cedido a
+            // Central, y ahí sí corresponde el selector (PLAN B / R4).
+            const _ofertaViva = String(w.asignadaA || '').trim() !== ''
+                             || String(w.tomadaPor || '').trim() !== '';
+            const _compsPend = (_fuente === 'LineasNativo' && !_ofertaViva && Array.isArray(w.serviciosDetalle))
               ? w.serviciosDetalle.filter(function (c) {
-                  return String(c.estado || '') === 'esperando' && String(c.id || '').trim();
+                  return String(c.estado || '') === 'esperando'
+                      && !String(c.staff || '').trim()
+                      && String(c.id || '').trim();
                 })
               : [];
             const reassignPorComponenteHTML = _compsPend.length ? _compsPend.map(function (c, ci) {
