@@ -3322,6 +3322,13 @@
         if (slot === 0) {
           window._as1Client = a.codigo;
           window._as1IdEspera = a.idEspera || window._takingId || ''; // ID ticket LE-XXXX
+          // G2 FIX · este es el camino de TOMAR (no el de loadStaffHome), y aquí
+          // también hay que persistir la atención: updateFinishButtons y
+          // showConfirmServiceModal leen _asNAten para saber si el ticket es
+          // LineasNativo. Sin esto quedaba undefined justo después de tomar, así
+          // que caía al flujo legacy: salían los botones viejos y reaparecía la
+          // segunda confirmación con la promo completa sumada encima.
+          window._as1Aten = a || window._takingData || null;
           const initials = (a.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av0 = document.getElementById('as1Avatar');
           if (_as1av0) { _as1av0.textContent = initials; _as1av0.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -3703,6 +3710,7 @@
         } else {
           window._as2Client = a.codigo;
           window._as2IdEspera = a.idEspera || window._takingId || ''; // ID del ticket de la 2ª clienta
+          window._as2Aten = a || window._takingData || null;   // G2 FIX · ver nota en slot 1
           const initials2b = a.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as2avb = document.getElementById('as2Avatar');
           if (_as2avb) { _as2avb.textContent = initials2b; _as2avb.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
