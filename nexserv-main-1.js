@@ -1528,7 +1528,7 @@
           // necesita fuente y serviciosDetalle (con linea_id) para decidir el
           // modal nativo. Antes solo se guardaba el idEspera y esa info se perdía.
           window._as1Aten = a1;
-          window._as1EsNativo = String(a1.fuente || '') === 'LineasNativo';
+          window._as1EsNativo = _fuenteEsNativa(a1);
           const initials1 = (a1.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av = document.getElementById('as1Avatar');
           if (_as1av) { _as1av.textContent = initials1; _as1av.className = 'client-avatar' + (a1.esTop ? ' is-top' : ''); }
@@ -1549,7 +1549,7 @@
           // En LineasNativo slotServices se arma con las líneas que son SUYAS
           // (staff = ella y no anuladas). Mikaela y la hoja ya estaban bien:
           // esto era solo la pantalla de la staff.
-          var _nativo1 = String(a1.fuente || '') === 'LineasNativo'
+          var _nativo1 = _fuenteEsNativa(a1)
                       && Array.isArray(a1.serviciosDetalle) && a1.serviciosDetalle.length > 0;
           if (_nativo1) {
             var _yo1 = String((window.currentUser && window.currentUser.name) || '').toLowerCase();
@@ -1604,7 +1604,7 @@
               window._as2Client = a2.codigo;
               window._as2IdEspera = a2.idEspera || ''; // ID del ticket de la 2ª clienta
               window._as2Aten = a2;   // G2 · ver nota en slot 1
-              window._as2EsNativo = String(a2.fuente || '') === 'LineasNativo';
+              window._as2EsNativo = _fuenteEsNativa(a2);
               activeClients[user.name].push({ name: a2.nombre, code: a2.codigo, service: a2.servicio });
               const initials2 = a2.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
               const _as2av = document.getElementById('as2Avatar'); if (_as2av) _as2av.textContent = initials2;
@@ -1612,7 +1612,7 @@
               const _as2cd = document.getElementById('as2Code'); if (_as2cd) _as2cd.textContent = a2.codigo + (a2.horaLlegada ? ' · Llegó ' + a2.horaLlegada : '');
               // Cargar servicios de la 2ª clienta si vienen del ticket
               // SP NATIVO · solo mis componentes (ver nota en el slot 1)
-              var _nativo2 = String(a2.fuente || '') === 'LineasNativo'
+              var _nativo2 = _fuenteEsNativa(a2)
                           && Array.isArray(a2.serviciosDetalle) && a2.serviciosDetalle.length > 0;
               if (_nativo2) {
                 var _yo2 = String((window.currentUser && window.currentUser.name) || '').toLowerCase();
@@ -3431,7 +3431,7 @@
           // que caía al flujo legacy: salían los botones viejos y reaparecía la
           // segunda confirmación con la promo completa sumada encima.
           window._as1Aten = a || window._takingData || null;
-          window._as1EsNativo = String((window._as1Aten && window._as1Aten.fuente) || '') === 'LineasNativo';
+          window._as1EsNativo = _fuenteEsNativa(window._as1Aten);
           const initials = (a.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av0 = document.getElementById('as1Avatar');
           if (_as1av0) { _as1av0.textContent = initials; _as1av0.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -3551,7 +3551,10 @@
           // quedaban sin poblar — por eso la rama nativa no se activaba y no
           // salían los 4 botones.
           var _atenNat1 = a || window._takingData || null;
-          var _esNat1   = !!(_atenNat1 && String(_atenNat1.fuente || '') === 'LineasNativo');
+          // fuenteReal (getAtenciones) O fuente='LineasNativo' (tarjeta). El objeto
+          // 'a' viene de getAtenciones y NO trae 'LineasNativo': mirar solo eso
+          // hacía que esta rama nunca corriera y volviera el push de la promo.
+          var _esNat1   = _fuenteEsNativa(_atenNat1) || _fuenteEsNativa(window._takingData);
           if (_esNat1) {
             window._as1Aten     = _atenNat1;
             window._as1EsNativo = true;
@@ -3853,7 +3856,7 @@
           window._as2Client = a.codigo;
           window._as2IdEspera = a.idEspera || window._takingId || ''; // ID del ticket de la 2ª clienta
           window._as2Aten = a || window._takingData || null;   // G2 FIX · ver nota en slot 1
-          window._as2EsNativo = String((window._as2Aten && window._as2Aten.fuente) || '') === 'LineasNativo';
+          window._as2EsNativo = _fuenteEsNativa(window._as2Aten);
           const initials2b = a.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as2avb = document.getElementById('as2Avatar');
           if (_as2avb) { _as2avb.textContent = initials2b; _as2avb.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -4910,6 +4913,23 @@
     loadSesiones();
   }
 
+  // ── NORMALIZADOR DE FUENTE ───────────────────────────────────────────────────
+  // El backend usa DOS nombres para la misma verdad, y hay que aceptar los dos:
+  //   · getAtenciones  -> fuenteReal: 'LINEAS' | 'LEGACY' | 'DESCONOCIDA'
+  //                       (a.fuente ahí es el TIPO HISTÓRICO, no la arquitectura;
+  //                        AppsScript.js:5115 lo marca como "NO TOCAR")
+  //   · _cardItem      -> fuente: 'LineasNativo'   (lista de espera / tarjeta)
+  // Mirar solo una de las dos deja fuera la mitad de los caminos: el objeto que
+  // llega tras TOMAR viene de getAtenciones y NO trae 'LineasNativo'.
+  // fuenteReal manda; 'LineasNativo' es el respaldo para objetos de tarjeta.
+  function _fuenteEsNativa(a) {
+    if (!a) return false;
+    var fr = String(a.fuenteReal || '').toUpperCase();
+    if (fr === 'LINEAS') return true;
+    if (fr === 'LEGACY' || fr === 'DESCONOCIDA') return false;  // canónico y explícito: no adivinar
+    return String(a.fuente || '') === 'LineasNativo';
+  }
+
   // ── ¿el slot corresponde a un ticket nativo LINEAS? ──────────────────────────
   // Se consulta desde varios puntos y NO puede depender de una sola fuente: el
   // slot se puebla por dos caminos distintos (loadStaffHome y el de TOMAR), y si
@@ -4921,11 +4941,10 @@
   function _esSlotNativoLineas(slot) {
     try {
       const _a = (slot === 1) ? window._as1Aten : window._as2Aten;
-      if (_a && String(_a.fuente || '') === 'LineasNativo') return true;
+      if (_fuenteEsNativa(_a)) return true;
       const _f = (slot === 1) ? window._as1EsNativo : window._as2EsNativo;
       if (_f === true) return true;
-      const _t = window._takingData;
-      if (_t && String(_t.fuente || '') === 'LineasNativo') return true;
+      if (_fuenteEsNativa(window._takingData)) return true;
     } catch (e) {}
     return false;
   }
