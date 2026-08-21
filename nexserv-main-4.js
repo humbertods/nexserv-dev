@@ -5403,9 +5403,13 @@ window.cargarInformeServicios = cargarInformeServicios;
   async function nativoPasarOtraStaff(ticketRef, lineaIds) {
     const u = window.currentUser;
     const slot = window._finishingSlot || 1;
-    if (!Array.isArray(lineaIds) || !lineaIds.length) {
-      alert('No tenés servicios en curso para finalizar en este ticket.'); return;
-    }
+    // NO se corta acá por lineaIds vacío. El cliente no siempre puede armar la
+    // lista (la atención puede venir de una lectura previa, o slotServices
+    // haberse repoblado por un camino que no conserva lineaId). El backend la
+    // resuelve contra LINEAS con _lnMisLineasEnServicioTicket_ y devuelve
+    // SIN_LINEAS_EN_SERVICIO si de verdad no hay nada en curso — esa es la
+    // única fuente que no depende del estado del navegador.
+    if (!Array.isArray(lineaIds)) lineaIds = [];
     try {
       const r = await apiPost('cederPendientesACentral', {
         ticketRef: ticketRef, staff: u?.name || '', lineaIds: lineaIds
@@ -5427,9 +5431,13 @@ window.cargarInformeServicios = cargarInformeServicios;
   async function nativoTerminarYCancelar(ticketRef, lineaIds, lblPendiente) {
     const u = window.currentUser;
     const slot = window._finishingSlot || 1;
-    if (!Array.isArray(lineaIds) || !lineaIds.length) {
-      alert('No tenés servicios en curso para finalizar en este ticket.'); return;
-    }
+    // NO se corta acá por lineaIds vacío. El cliente no siempre puede armar la
+    // lista (la atención puede venir de una lectura previa, o slotServices
+    // haberse repoblado por un camino que no conserva lineaId). El backend la
+    // resuelve contra LINEAS con _lnMisLineasEnServicioTicket_ y devuelve
+    // SIN_LINEAS_EN_SERVICIO si de verdad no hay nada en curso — esa es la
+    // única fuente que no depende del estado del navegador.
+    if (!Array.isArray(lineaIds)) lineaIds = [];
     try {
       const r = await apiPost('terminarYCancelarPendientes', {
         ticketRef: ticketRef, staff: u?.name || '', lineaIds: lineaIds,
@@ -5451,9 +5459,13 @@ window.cargarInformeServicios = cargarInformeServicios;
   async function nativoTerminarMandarCentral(ticketRef, lineaIds) {
     const u = window.currentUser;
     const slot = window._finishingSlot || 1;
-    if (!Array.isArray(lineaIds) || !lineaIds.length) {
-      alert('No tenés servicios en curso para finalizar en este ticket.'); return;
-    }
+    // NO se corta acá por lineaIds vacío. El cliente no siempre puede armar la
+    // lista (la atención puede venir de una lectura previa, o slotServices
+    // haberse repoblado por un camino que no conserva lineaId). El backend la
+    // resuelve contra LINEAS con _lnMisLineasEnServicioTicket_ y devuelve
+    // SIN_LINEAS_EN_SERVICIO si de verdad no hay nada en curso — esa es la
+    // única fuente que no depende del estado del navegador.
+    if (!Array.isArray(lineaIds)) lineaIds = [];
     try {
       const r = await apiPost('finalizarComponentesStaff', {
         ticketRef: ticketRef, staff: u?.name || '', lineaIds: lineaIds
