@@ -699,8 +699,8 @@
     // Sin pendientes → un solo botón "Terminé — mandar a central".
     // "Central" = lista de espera. La staff NUNCA manda a cobro: eso lo decide
     // la admin. Por eso ningún botón de acá dice "cobro".
-    const _atenSlot = slot1 ? (window._as1Aten || null) : (window._as2Aten || null);
-    if (_atenSlot && String(_atenSlot.fuente || '') === 'LineasNativo'
+    const _atenSlot = (slot1 ? window._as1Aten : window._as2Aten) || window._takingData || null;
+    if (_esSlotNativoLineas(slot1 ? 1 : 2) && _atenSlot
         && Array.isArray(_atenSlot.serviciosDetalle) && _atenSlot.serviciosDetalle.length > 1) {
       const _slotN  = slot1 ? 1 : 2;
       const _refNat = String(_atenSlot.idEspera || _idEsperaSlot || '');
@@ -1473,6 +1473,7 @@
           // necesita fuente y serviciosDetalle (con linea_id) para decidir el
           // modal nativo. Antes solo se guardaba el idEspera y esa info se perdía.
           window._as1Aten = a1;
+          window._as1EsNativo = String(a1.fuente || '') === 'LineasNativo';
           const initials1 = (a1.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av = document.getElementById('as1Avatar');
           if (_as1av) { _as1av.textContent = initials1; _as1av.className = 'client-avatar' + (a1.esTop ? ' is-top' : ''); }
@@ -1520,6 +1521,7 @@
               window._as2Client = a2.codigo;
               window._as2IdEspera = a2.idEspera || ''; // ID del ticket de la 2ª clienta
               window._as2Aten = a2;   // G2 · ver nota en slot 1
+              window._as2EsNativo = String(a2.fuente || '') === 'LineasNativo';
               activeClients[user.name].push({ name: a2.nombre, code: a2.codigo, service: a2.servicio });
               const initials2 = a2.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
               const _as2av = document.getElementById('as2Avatar'); if (_as2av) _as2av.textContent = initials2;
@@ -1542,6 +1544,7 @@
               window._as2Client = '';
               window._as2IdEspera = '';
               window._as2Aten = null;
+              window._as2EsNativo = false;
               slotServices[2] = [];
               const _as2nm = document.getElementById('as2Name'); if (_as2nm) _as2nm.textContent = '';
               const _as2cd2 = document.getElementById('as2Code'); if (_as2cd2) _as2cd2.textContent = '';
@@ -3329,6 +3332,7 @@
           // que caía al flujo legacy: salían los botones viejos y reaparecía la
           // segunda confirmación con la promo completa sumada encima.
           window._as1Aten = a || window._takingData || null;
+          window._as1EsNativo = String((window._as1Aten && window._as1Aten.fuente) || '') === 'LineasNativo';
           const initials = (a.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av0 = document.getElementById('as1Avatar');
           if (_as1av0) { _as1av0.textContent = initials; _as1av0.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -3711,6 +3715,7 @@
           window._as2Client = a.codigo;
           window._as2IdEspera = a.idEspera || window._takingId || ''; // ID del ticket de la 2ª clienta
           window._as2Aten = a || window._takingData || null;   // G2 FIX · ver nota en slot 1
+          window._as2EsNativo = String((window._as2Aten && window._as2Aten.fuente) || '') === 'LineasNativo';
           const initials2b = a.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as2avb = document.getElementById('as2Avatar');
           if (_as2avb) { _as2avb.textContent = initials2b; _as2avb.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -4767,6 +4772,26 @@
     loadSesiones();
   }
 
+  // ── ¿el slot corresponde a un ticket nativo LINEAS? ──────────────────────────
+  // Se consulta desde varios puntos y NO puede depender de una sola fuente: el
+  // slot se puebla por dos caminos distintos (loadStaffHome y el de TOMAR), y si
+  // la detección falla el sistema cae al flujo legacy — que fue exactamente lo
+  // que hacía reaparecer la segunda confirmación con la promo completa sumada
+  // encima ($25 seleccionados + $40 de la promo = $65).
+  // Se mira, en orden: la atención persistida del slot, el flag sellado al
+  // tomar, y el objeto de toma todavía en memoria.
+  function _esSlotNativoLineas(slot) {
+    try {
+      const _a = (slot === 1) ? window._as1Aten : window._as2Aten;
+      if (_a && String(_a.fuente || '') === 'LineasNativo') return true;
+      const _f = (slot === 1) ? window._as1EsNativo : window._as2EsNativo;
+      if (_f === true) return true;
+      const _t = window._takingData;
+      if (_t && String(_t.fuente || '') === 'LineasNativo') return true;
+    } catch (e) {}
+    return false;
+  }
+
   function showConfirmServiceModal(slot) {
     // ── SP NATIVO · SIN SEGUNDA CONFIRMACIÓN ─────────────────────────────────
     // En un ticket LineasNativo la staff YA eligió qué componentes hace, en el
@@ -4776,14 +4801,11 @@
     // eso reaparecían los 3 componentes cuando la staff solo aceptó 2 — la
     // segunda confirmación contradice la selección que ella acaba de hacer.
     // El ticket ya está tomado y las líneas escritas: no hay nada que confirmar.
-    try {
-      const _atenCS = (slot === 1) ? (window._as1Aten || null) : (window._as2Aten || null);
-      if (_atenCS && String(_atenCS.fuente || '') === 'LineasNativo') {
-        const _m = document.getElementById('confirmServiceModal');
-        if (_m) _m.classList.remove('active');
-        return;
-      }
-    } catch (eCS) {}
+    if (_esSlotNativoLineas(slot)) {
+      const _m = document.getElementById('confirmServiceModal');
+      if (_m) _m.classList.remove('active');
+      return;
+    }
     const slotStr = String(slot);
     const clientName = document.getElementById('as' + slotStr + 'Name')?.textContent?.replace(' ⭐','') || '';
     const svcs = slotServices[slot] || [];
