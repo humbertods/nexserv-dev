@@ -3368,6 +3368,18 @@
     var t = String(s == null ? '' : s);
     t = t.replace(/\[paralelo[^\]]*\]/gi, '');       // marcador de servicio paralelo
     t = t.replace(/_completedAreas:\s*\[.*?\]/g, ''); // progreso de promo (interno)
+    // ── MARCADORES NATIVE — identidad interna, NUNCA para la staff ──────────
+    // obs guarda los marcadores del contrato de líneas
+    // ([NATIVE_REQUEST_ID:…], [NATIVE_LINE_REQUEST_FP:…], [PROMO_NOMBRE:…]).
+    // Se estaban pintando crudos en "Nota Especial": ilegibles, se desbordaban
+    // del recuadro y exponían identidad interna del sistema. El desborde era el
+    // síntoma; el problema es que estuvieran ahí. Se filtran en el mismo lugar
+    // donde ya se filtran los otros marcadores internos, así que cualquier
+    // consumidor de esta función queda cubierto de una sola vez.
+    t = t.replace(/\[NATIVE_[A-Z_]*:[^\]]*\]/g, '');
+    t = t.replace(/\[PROMO_NOMBRE:[^\]]*\]/g, '');
+    t = t.replace(/\[(cerrado al completar|promo [^\]]*)\]/gi, '');
+    t = t.replace(/\s{2,}/g, ' ');                  // colapsar huecos que dejó el filtrado
     return t.trim();
   }
   function _obsDeArea(a, area){
