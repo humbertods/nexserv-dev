@@ -680,6 +680,23 @@
     const btnContainer = document.getElementById('as' + (slot1?1:2) + 'FinishBtns');
     if (!btnContainer) return;
 
+    // ── G2-RACE · higiene del flag monótono ─────────────────────────────────
+    // _asNEsNativo no se degrada nunca (ver notas en loadStaffHome), así que el
+    // ÚNICO reset válido es el cambio de ticket. Sin esto, una staff que toma
+    // un nativo y después uno legacy arrastraría el flag y vería la rama nativa
+    // sobre un ticket que no lo es.
+    var _slotIdx  = slot1 ? 1 : 2;
+    var _refAhora = String(window['_as' + _slotIdx + 'IdEspera'] || '');
+    if (window['_as' + _slotIdx + 'RefFlag'] !== _refAhora) {
+      window['_as' + _slotIdx + 'RefFlag']  = _refAhora;
+      window['_as' + _slotIdx + 'EsNativo'] = _fuenteEsNativa(window['_as' + _slotIdx + 'Aten']);
+      window['_as' + _slotIdx + 'PintaTok'] = 0;
+    }
+    // Token de invocación: cada llamada se numera y solo la ÚLTIMA puede pintar
+    // desde una promesa. Sin esto, dos apiPost en vuelo compiten y gana el que
+    // resuelve último, que no es necesariamente el que se lanzó último.
+    var _pintaTok = (window['_as' + _slotIdx + 'PintaTok'] = (window['_as' + _slotIdx + 'PintaTok'] || 0) + 1);
+
     const clientName = document.getElementById('as' + (slot1?1:2) + 'Name')?.textContent?.replace(' ⭐','') || '';
     const clientKey = normalizeClientKey(clientName);
     const promoData = activePromos[clientKey];
@@ -724,6 +741,9 @@
       const _lineaActual = _miasNat.length ? String(_miasNat[_miasNat.length - 1].id) : '';
       apiPost('siguientePendienteBloque', { ticketRef: _refNat, lineaActualId: _lineaActual })
         .then(function (r) {
+          // Descartar si ya hubo otra invocación para este slot: pintar acá
+          // sería un fantasma de una consulta vieja.
+          if (window['_as' + _slotIdx + 'PintaTok'] !== _pintaTok) return;
           const _sigId  = (r && r.success && r.linea_id) ? String(r.linea_id) : '';
           const _sigLbl = _esc((r && r.servicio) || (r && r.componente_seq) || 'siguiente servicio');
           if (!_sigId) {
@@ -749,6 +769,7 @@
             + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
         })
         .catch(function () {
+          if (window['_as' + _slotIdx + 'PintaTok'] !== _pintaTok) return;
           // Fail-safe: si no se pudo consultar el siguiente, NO se ofrecen las
           // acciones destructivas. Solo cerrar mi parte o devolver.
           btnContainer.innerHTML =
@@ -1528,7 +1549,16 @@
           // necesita fuente y serviciosDetalle (con linea_id) para decidir el
           // modal nativo. Antes solo se guardaba el idEspera y esa info se perdía.
           window._as1Aten = a1;
-          window._as1EsNativo = _fuenteEsNativa(a1);
+          // MONÓTONO · una vez que el ticket se resolvió como nativo, no se
+          // degrada. getAtenciones puede devolver fuenteReal='DESCONOCIDA' en
+          // una relectura si el caché de TicketsFuente no resuelve en ese
+          // request — y mi normalizador, por contrato D7.1, trata DESCONOCIDA
+          // como no-nativo (fail-closed). Eso invertía el guard después de que
+          // la rama nativa ya había pintado, y un updateFinishButtons tardío
+          // caía a la rama SP- legacy (:780, "enviar a cobro con Mikaela").
+          // Se sube a true, nunca se baja: la fuente de un ticket es inmutable.
+          // El reset a false solo ocurre al cambiar de ticket (ver limpiezas).
+          window._as1EsNativo = (window._as1EsNativo === true) || _fuenteEsNativa(a1);
           const initials1 = (a1.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av = document.getElementById('as1Avatar');
           if (_as1av) { _as1av.textContent = initials1; _as1av.className = 'client-avatar' + (a1.esTop ? ' is-top' : ''); }
@@ -1604,7 +1634,8 @@
               window._as2Client = a2.codigo;
               window._as2IdEspera = a2.idEspera || ''; // ID del ticket de la 2ª clienta
               window._as2Aten = a2;   // G2 · ver nota en slot 1
-              window._as2EsNativo = _fuenteEsNativa(a2);
+              // MONÓTONO — ver nota en slot 1.
+              window._as2EsNativo = (window._as2EsNativo === true) || _fuenteEsNativa(a2);
               activeClients[user.name].push({ name: a2.nombre, code: a2.codigo, service: a2.servicio });
               const initials2 = a2.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
               const _as2av = document.getElementById('as2Avatar'); if (_as2av) _as2av.textContent = initials2;
@@ -3443,7 +3474,8 @@
           // que caía al flujo legacy: salían los botones viejos y reaparecía la
           // segunda confirmación con la promo completa sumada encima.
           window._as1Aten = a || window._takingData || null;
-          window._as1EsNativo = _fuenteEsNativa(window._as1Aten);
+          // MONÓTONO — ver nota en loadStaffHome slot 1.
+          window._as1EsNativo = (window._as1EsNativo === true) || _fuenteEsNativa(window._as1Aten);
           const initials = (a.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av0 = document.getElementById('as1Avatar');
           if (_as1av0) { _as1av0.textContent = initials; _as1av0.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -3868,7 +3900,8 @@
           window._as2Client = a.codigo;
           window._as2IdEspera = a.idEspera || window._takingId || ''; // ID del ticket de la 2ª clienta
           window._as2Aten = a || window._takingData || null;   // G2 FIX · ver nota en slot 1
-          window._as2EsNativo = _fuenteEsNativa(window._as2Aten);
+          // MONÓTONO — ver nota en slot 1.
+          window._as2EsNativo = (window._as2EsNativo === true) || _fuenteEsNativa(window._as2Aten);
           const initials2b = a.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as2avb = document.getElementById('as2Avatar');
           if (_as2avb) { _as2avb.textContent = initials2b; _as2avb.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
