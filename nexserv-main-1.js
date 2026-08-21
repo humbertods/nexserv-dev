@@ -751,7 +751,7 @@
               '<button class="btn-primary" style="margin-bottom:10px;background:var(--success);font-size:14px;padding:16px;"'
               + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarMandarCentral(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
               + '&#9989; Termin&eacute; &mdash; mandar a central</button>'
-              + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
+              + '<button style="margin-bottom:10px;width:100%;padding:14px;background:#fff;border:1.5px solid var(--line);border-radius:var(--radius-pill);font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;color:var(--danger);"'
               + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
             return;
           }
@@ -765,7 +765,7 @@
             + '<button style="margin-bottom:8px;width:100%;padding:14px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
             + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarYCancelar(\'' + _esc(_refNat) + '\',' + _idsMias + ',\'' + _sigLbl + '\')">'
             + '&#9989; Termin&eacute; todo &mdash; la clienta se retira, mandar a central</button>'
-            + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
+            + '<button style="margin-bottom:10px;width:100%;padding:14px;background:#fff;border:1.5px solid var(--line);border-radius:var(--radius-pill);font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;color:var(--danger);"'
             + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
         })
         .catch(function () {
@@ -776,7 +776,7 @@
             '<button class="btn-primary" style="margin-bottom:10px;background:var(--success);font-size:14px;padding:16px;"'
             + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarMandarCentral(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
             + '&#9989; Termin&eacute; &mdash; mandar a central</button>'
-            + '<button class="btn-primary outline" style="margin-bottom:10px;font-size:13px;color:var(--danger);"'
+            + '<button style="margin-bottom:10px;width:100%;padding:14px;background:#fff;border:1.5px solid var(--line);border-radius:var(--radius-pill);font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;color:var(--danger);"'
             + ' onclick="window._finishingSlot=' + _slotN + '; nativoDevolverACentral(' + _slotN + ')">Devolver a central</button>';
         });
       return;
