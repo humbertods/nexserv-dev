@@ -1409,6 +1409,57 @@
     
     // Obtener el precio que le corresponde a esta área (suma todas las partes que puede hacer)
     const myPrice = getMyPromoPrice(promo, myArea);
+
+    // ── CABLEADO RUTA NATIVA — CAPTURA PREVIA ─────────────────────────────
+    // slotServices[slot] se REEMPLAZA unas líneas más abajo por el renglón de
+    // la promo, y con él se pierde el lineaId de la línea que se sustituye.
+    // Hay que leerlo ACÁ, antes del reemplazo — nunca después.
+    // El valor viene del lineaId real que expone la atención nativa (lo pueblan
+    // las ramas LINEAS de nexserv-main-1.js); jamás se deriva de nombre,
+    // precio, área ni índice. Debe haber EXACTAMENTE UNA candidata.
+    // Si no está, se manda vacío: para un ticket cuya fuente canónica es
+    // LINEAS el backend corta fail-closed, y NUNCA cae a legacy.
+    const _svcOrigen = (slotServices[slot] || []).filter(function (sv) {
+      return String(sv && sv.lineaId || '').trim();
+    });
+    const _lineaOrigenId = _svcOrigen.length === 1
+      ? String(_svcOrigen[0].lineaId).trim()
+      : '';   // 0 → sin identidad; 2+ → ambigua. En ambos casos: no inventar.
+    if (_svcOrigen.length > 1) {
+      console.warn('[applyPromo] identidad de línea origen ambigua —', _svcOrigen.length,
+                   'líneas con lineaId en el slot. Se manda vacío; el backend decide.');
+    }
+
+    // componentes[]: posicional contra la división que el backend resuelve
+    // desde Paquetes. El frontend NO fabrica precios, áreas ni servicios —
+    // solo la identidad de staff por componente:
+    //   · el que sustituye al origen → staff actual
+    //   · los demás                  → staff vacía (nacen 'esperando')
+    // El índice origen se localiza con el MISMO criterio del backend: nombre
+    // de servicio normalizado. Si no se resuelve, se manda [] y el backend
+    // corta. Acá NO se aborta: este camino también sirve a tickets LEGACY, y
+    // la fuente canónica solo la conoce el backend.
+    const _divPromo = Array.isArray(promo.division) ? promo.division : [];
+    const _servOrigenNombre = _svcOrigen.length === 1 ? String(_svcOrigen[0].name || '') : '';
+    let _idxOrigenPromo = -1;
+    if (_divPromo.length && _servOrigenNombre && typeof _normTextoSustFront_ === 'function') {
+      const _nOrig = _normTextoSustFront_(_servOrigenNombre);
+      for (let i = 0; i < _divPromo.length; i++) {
+        if (_normTextoSustFront_(_divPromo[i].servicio) === _nOrig) { _idxOrigenPromo = i; break; }
+      }
+    }
+    const _componentesPromo = (_idxOrigenPromo === -1) ? [] : _divPromo.map(function (d, i) {
+      return { staff: (i === _idxOrigenPromo) ? (user?.name || '') : '', lineaPadre: '' };
+    });
+
+    // requestId estable para ESTE intento: se genera UNA vez, antes del POST,
+    // así los reintentos de apiPost (que reenvían el mismo objeto y solo
+    // cambian `_t`) llegan al mecanismo de idempotencia nativo como replay y
+    // no como acción nueva. Charset acotado por _lnValidarLineRequestId_.
+    const _reqIdPromo = ('SUST-' + (slot === 1 ? (window._as1IdEspera || '') : (window._as2IdEspera || '')) +
+                         '-' + (_lineaOrigenId || 'NOID') + '-' + Date.now() +
+                         '-' + Math.random().toString(36).slice(2, 8)).replace(/[^A-Za-z0-9_-]/g, '');
+
     
     // Agregar servicio de promo a slotServices.
     // _yaEnLinea: la promo se registra como sus propias líneas en LINEAS (aplicarPromoStaff),
@@ -1507,6 +1558,14 @@
       });
       apiPost('aplicarPromoStaff', {
         idEspera      : _idEsperaPromo,
+        // Campos del contrato NATIVO. El backend decide por fuente canónica;
+        // para un ticket LEGACY el handler los ignora, así que agregarlos no
+        // altera ese camino.
+        ticketRef      : _idEsperaPromo,
+        lineaOrigenId  : _lineaOrigenId,
+        promoCatalogoId: promo.name,
+        requestId      : _reqIdPromo,
+        componentes    : _componentesPromo,
         chicaNombre   : user?.name || '',
         clienteNombre : clientName,
         clienteCodigo : slot === 1 ? (window._as1Client || '') : (window._as2Client || ''),
