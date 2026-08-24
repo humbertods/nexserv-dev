@@ -613,17 +613,25 @@
               return AREA_KEY_FROM_DIV(d.realArea || d.area || d.servicio || '') === akArea;
             })
           : [];
+        // F3-A — lineaId real de esta área (LINEAS.id), transportado desde
+        // handleGetListaCompleta. Si la promo se despliega en sub-partes, todas
+        // pertenecen a la MISMA fila LINEAS, así que comparten el mismo id.
+        var _lineaIdArea = String(a.lineaId || '');
         if (subPartes.length > 1) {
           subPartes.forEach(function(d){
-            filas.push({ label: (d.servicio || d.area || lbl), staff: a.staff||'—', monto: Number(d.monto||0), done: done });
+            filas.push({ label: (d.servicio || d.area || lbl), staff: a.staff||'—', monto: Number(d.monto||0), done: done, lineaId: _lineaIdArea });
           });
         } else {
-          filas.push({ label: lbl, staff: a.staff||'—', monto: Number(a.precio||0), done: done });
+          filas.push({ label: lbl, staff: a.staff||'—', monto: Number(a.precio||0), done: done, lineaId: _lineaIdArea });
         }
       });
     } else if (Array.isArray(c.serviciosDetalle) && c.serviciosDetalle.length) {
       c.serviciosDetalle.forEach(function(d){
-        filas.push({ label: (d.servicio || d.area || 'Servicio'), staff: d.staff||'—', monto: Number(d.monto||0), done: true });
+        // F3-A — LINEAS.id ya presente en el detalle, bajo dos nombres según el
+        // productor del backend: `lineaId` (agrupado Bloque 8B) o `id` (overlay
+        // nativo). Se conserva tal cual, sin fabricar ni derivar nada; si el
+        // productor no lo trae, queda vacío y la fila no entra como candidata.
+        filas.push({ label: (d.servicio || d.area || 'Servicio'), staff: d.staff||'—', monto: Number(d.monto||0), done: true, lineaId: String(d.lineaId || d.id || '') });
       });
     } else {
       const obs = String(c.observaciones||'');
@@ -666,6 +674,26 @@
   }
   function buildCompletadaCard(c){
     const nombreSafe = String(c.nombre||'').replace(/'/g, "\\'");
+    // F3-A — registro de candidatas a lineaPadre para este ticket.
+    // Se guarda en un mapa por ticket en vez de serializarlo en el onclick:
+    // el id viaja como dato, no incrustado en HTML (sin riesgo de escape) y
+    // llega intacto hasta el payload nativo. Solo se registran filas con un
+    // LINEAS.id real; nunca se fabrica uno a partir de idx/nombre/área.
+    try {
+      const _refTk = String(c.idEspera || '');
+      if (_refTk) {
+        window._extraCandidatosPorTicket = window._extraCandidatosPorTicket || {};
+        const _cands = [];
+        const _vistos = {};
+        _desgloseFilas(c).forEach(function(r){
+          const _lid = String(r.lineaId || '').trim();
+          if (!_lid || _vistos[_lid]) return;
+          _vistos[_lid] = true;
+          _cands.push({ lineaId: _lid, label: String(r.label || 'Servicio'), staff: String(r.staff || '') });
+        });
+        window._extraCandidatosPorTicket[_refTk] = _cands;
+      }
+    } catch (e) { /* el registro es auxiliar: nunca debe romper el render */ }
     // Total visible = suma de los servicios mostrados (agendados + extras)
     const total = _desgloseTotal(c) || Number(c.total||0);
     const totalStr = total > 0
@@ -703,7 +731,17 @@
   }
   function agregarServicioExtra(idEspera, codigo, nombre){
     // Reusa el modal de asignar servicio (área + servicio + staff) en "modo extra":
-    // al confirmar, agrega el servicio al MISMO ticket y lo reabre a la lista.
+    // al confirmar, agrega el servicio al MISMO ticket como una nueva línea LINEAS
+    // (agregarExtraMikaelaNativo · modoExtra=POR_EJECUTAR). Nunca crea un ticket aparte.
+    //
+    // F3-A — las candidatas a lineaPadre se publican en window para que
+    // openAssignServiceModal (main-2.js) las lea sin acoplarse a este módulo.
+    // TM exige lineaPadre siempre; SN/SP solo cuando el backend detecta ambigüedad.
+    try {
+      const _mapa = window._extraCandidatosPorTicket || {};
+      window._extraCandidatos = _mapa[String(idEspera || '')] || [];
+      window._extraEsTM = String(idEspera || '').indexOf('TM-') === 0;
+    } catch (e) { window._extraCandidatos = []; window._extraEsTM = false; }
     openAssignServiceModal(codigo, nombre, idEspera);
   }
 
