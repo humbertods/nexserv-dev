@@ -4309,9 +4309,14 @@
         // Autorizaciones pendientes
         renderAuthorizations();
         
-        // Auto-refresh inteligente: 8s si hay clientas en atención, 15s si no
+        // INC-360 · Fase 1 — CAMBIO 2: 8s/15s → 15s/30s.
+        // Cada ciclo dispara getCajaChica + getServiciosCobrados + getPrelista
+        // + getListaCompleta + getAutorizaciones. No se consolidan endpoints ni
+        // se toca el renderizado en esta fase: solo baja la frecuencia. La carga
+        // inmediata al entrar y los refrescos explícitos tras cada acción
+        // siguen intactos, así que Central ve sus propios cambios al instante.
         if (window._mikaelaAutoRefresh) clearInterval(window._mikaelaAutoRefresh);
-        const refreshInterval = enServicio.length > 0 ? 8000 : 15000;
+        const refreshInterval = enServicio.length > 0 ? 15000 : 30000;
         window._mikaelaAutoRefresh = setInterval(() => {
           const currentScreen = document.querySelector('.screen.active');
           if (currentScreen && currentScreen.id === 'mikaelaHome') {
