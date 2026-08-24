@@ -728,7 +728,15 @@
       window._ultimoChequeoDescanso = ahora;
       if (typeof verificarDescansoActivo === 'function') verificarDescansoActivo();
     }, { passive: true, capture: true }));
-    setInterval(() => { if (typeof verificarDescansoActivo === 'function') verificarDescansoActivo(); }, 25000);
+    // INC-360 · Fase 1 — CAMBIO 4: 25 s → 60 s.
+    // La app web corre bajo UNA sola identidad, así que Central y todas las
+    // staff comparten la misma cuota de ejecuciones simultáneas de Apps Script.
+    // Este temporizador corría en TODAS las sesiones a la vez: era el de mayor
+    // multiplicador de todo el sistema. La lógica de descanso no cambia; solo
+    // se consulta con menos frecuencia. Los disparos por focus/visibilitychange
+    // de arriba siguen intactos, así que un cambio de descanso se sigue viendo
+    // de inmediato al volver a la pantalla.
+    setInterval(() => { if (typeof verificarDescansoActivo === 'function') verificarDescansoActivo(); }, 60000);
     // ────────────────────────────────────────────────────────
   });
 
