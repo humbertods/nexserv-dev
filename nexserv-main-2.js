@@ -2833,14 +2833,90 @@
 
   // === ASIGNAR SERVICIOS/PROMOS (Mikaela) ===
   
+  // ── F3-A — identidad de operación para el servicio extra nativo ──────────
+  // UN lineRequestId por INTENCIÓN LÓGICA (una apertura del modal "+ Servicio
+  // Extra"), reutilizado en todos los reintentos de transporte de esa misma
+  // operación — apiPost reintenta por dentro y debe mandar SIEMPRE el mismo id,
+  // porque la idempotencia del backend se apoya en él. Un id nuevo por retry
+  // crearía extras duplicados. Formato exigido por _lnValidarLineRequestId_:
+  // [A-Za-z0-9_-], ≤128 chars.
+  function _nuevoExtraLineRequestId_() {
+    var raw = '';
+    try {
+      if (typeof crypto !== 'undefined' && crypto && typeof crypto.randomUUID === 'function') {
+        raw = crypto.randomUUID().replace(/-/g, '');
+      }
+    } catch (e) { raw = ''; }
+    if (!raw) {
+      raw = Date.now().toString(36) + Math.random().toString(36).slice(2, 10)
+          + Math.random().toString(36).slice(2, 10);
+    }
+    return ('EXR_' + raw).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+  }
+
+  // Descarta la intención completa: ticket + identidad + padre + candidatas.
+  // Una nueva apertura del modal genera una identidad nueva.
+  function _limpiarCtxServicioExtra_() {
+    window._extraTicketId      = null;
+    window._extraLineRequestId = null;
+    window._extraLineaPadre    = null;
+    window._extraCandidatos    = null;
+    window._extraEsTM          = false;
+  }
+  window._limpiarCtxServicioExtra_ = _limpiarCtxServicioExtra_;
+
+  // Inserta (una sola vez) el selector de línea madre dentro del modal de
+  // asignar servicio. Se inyecta por DOM para no tocar index.html.
+  function _renderSelectorLineaPadre_(candidatos, esTM) {
+    var host = document.getElementById('assignSvcPriceDisplay');
+    if (!host || !host.parentNode) return;
+    var wrap = document.getElementById('assignSvcPadreWrap');
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.id = 'assignSvcPadreWrap';
+      wrap.style.margin = '10px 0';
+      wrap.innerHTML =
+        '<label style="display:block;font-size:12px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">'
+        + '¿A qué servicio se suma este extra?</label>'
+        + '<select id="assignSvcPadre" style="width:100%;padding:10px;border-radius:10px;'
+        + 'border:1.5px solid var(--line);font-family:inherit;font-size:14px;"></select>';
+      host.parentNode.insertBefore(wrap, host);
+    }
+    var sel = document.getElementById('assignSvcPadre');
+    if (!sel) return;
+    var lista = Array.isArray(candidatos) ? candidatos : [];
+    // TM exige lineaPadre siempre → sin opción vacía. SN/SP puede omitirla y
+    // dejar que el backend resuelva la única candidata inequívoca.
+    var opts = esTM ? '' : '<option value="">(el sistema lo resuelve)</option>';
+    opts += lista.map(function (c) {
+      var et = String(c.label || 'Servicio') + (c.staff && c.staff !== '—' ? ' · ' + c.staff : '');
+      return '<option value="' + String(c.lineaId) + '">' + et + '</option>';
+    }).join('');
+    sel.innerHTML = opts;
+    // Con una sola candidata en TM, queda preseleccionada: sigue siendo el id
+    // real de esa línea, no una inferencia por posición.
+    sel.value = (esTM && lista.length === 1) ? String(lista[0].lineaId) : (esTM ? '' : '');
+    // Solo se muestra si hay algo real que elegir.
+    wrap.style.display = lista.length ? 'block' : 'none';
+  }
+
   function openAssignServiceModal(clientCode, clientName, extraTicketId) {
     window._extraTicketId = extraTicketId || null;
+    // Identidad de la intención: se fija UNA vez, al abrir.
+    window._extraLineRequestId = extraTicketId ? _nuevoExtraLineRequestId_() : null;
+    window._extraLineaPadre = null;
     window._assigningClient = { code: clientCode, name: clientName };
     document.getElementById('assignSvcClientName').textContent = clientName;
     document.getElementById('assignSvcArea').value = '';
     document.getElementById('assignSvcService').innerHTML = '<option value="">Primero seleccioná el área</option>';
     var _svcNota = document.getElementById('assignSvcNota'); if (_svcNota) _svcNota.value = '';
     document.getElementById('assignSvcPriceDisplay').style.display = 'none';
+    if (extraTicketId) {
+      _renderSelectorLineaPadre_(window._extraCandidatos, !!window._extraEsTM);
+    } else {
+      var _wrapOff = document.getElementById('assignSvcPadreWrap');
+      if (_wrapOff) _wrapOff.style.display = 'none';
+    }
     document.getElementById('assignServiceModal').classList.add('active');
   }
   
@@ -2909,23 +2985,59 @@
 
       console.log('[ServicioExtra] modo extra:', !!window._extraTicketId, '| ticket:', window._extraTicketId || '(ninguno)');
 
-      // ── Modo "+ Servicio Extra": agregar al ticket existente ──
+      // ── Modo "+ Servicio Extra": nueva línea LINEAS en el MISMO ticket ──
+      // F3-A — ruta nativa agregarExtraMikaelaNativo. El backend fija
+      // estado=esperando y auth=aprobada por contrato de POR_EJECUTAR: acá no
+      // se envía ni se inventa auth_estado. TicketsFuente.destinataria no se
+      // toca; la staff elegida por Mikaela es la EJECUTORA de esta línea y
+      // viaja como `staff`.
       if (window._extraTicketId) {
-        const idEx = window._extraTicketId;
+        const idEx  = window._extraTicketId;
+        const lrid  = window._extraLineRequestId || _nuevoExtraLineRequestId_();
+        window._extraLineRequestId = lrid;   // se conserva para los reintentos
+        const selP  = document.getElementById('assignSvcPadre');
+        const padre = String((selP && selP.value) || window._extraLineaPadre || '').trim();
+        window._extraLineaPadre = padre || null;
+
+        // TM exige lineaPadre siempre. Se corta acá antes de gastar un POST.
+        if (String(idEx).indexOf('TM-') === 0 && !padre) {
+          alert('Elegí a qué servicio del ticket se suma este extra.');
+          return;
+        }
+
+        const payloadExtra = {
+          ticketRef:     idEx,
+          area:          svc.area,
+          servicioExtra: svc.name,
+          precio:        svc.price,
+          staff:         chica,
+          modoExtra:     'POR_EJECUTAR',
+          lineRequestId: lrid
+        };
+        // lineaPadre solo viaja si hay un LINEAS.id real. Si se omite, el
+        // backend resuelve la única candidata o rechaza por ambigüedad — nunca
+        // se adivina por índice, nombre, área ni posición visual.
+        if (padre) payloadExtra.lineaPadre = padre;
+
         try {
-          const rEx = await apiPost('agregarServicioExtra', {
-            idEspera: idEx, area: svc.area, servicio: svc.name, precio: svc.price, chica: chica
-          });
-          window._extraTicketId = null;
-          if (rEx && rEx.success) {
+          const rEx = await apiPost('agregarExtraMikaelaNativo', payloadExtra);
+          const okEx = !!(rEx && (rEx.ok || rEx.success));
+          if (okEx) {
+            _limpiarCtxServicioExtra_();
             if (typeof showToast === 'function') showToast('✓ Servicio extra agregado para ' + (client ? client.name : 'la clienta'));
             closeModal();
             loadMikaelaHome();
           } else {
-            alert(((rEx && (rEx.message || rEx.error)) || 'No se pudo agregar el servicio extra'));
+            // Se conserva el contexto: el mismo lineRequestId permite reintentar
+            // sin duplicar. Los errores del contrato nativo se muestran tal cual.
+            const errEx = String((rEx && (rEx.error || rEx.message)) || 'No se pudo agregar el servicio extra');
+            if (errEx === 'LINEA_PADRE_REQUERIDA_AMBIGUA' || errEx === 'LINEA_PADRE_REQUERIDA_TM') {
+              alert('Elegí a qué servicio del ticket se suma este extra.');
+            } else {
+              alert(errEx);
+            }
           }
         } catch (err) {
-          window._extraTicketId = null;
           console.error(err);
           alert('Error al agregar servicio extra');
         }
