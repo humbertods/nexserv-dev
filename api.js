@@ -257,6 +257,18 @@
   // veces. Un POST que NO las lleva es irrepetible.
   const _IDEMPOTENCIA_KEYS = ['lineRequestId', 'requestId', 'lineRequestIds', 'expectedLineRequestIds'];
 
+  // ── Acciones seguras de reintentar aunque no lleven clave de idempotencia ──
+  // La guardia anti-duplicado apunta a las ESCRITURAS DE NEGOCIO (clientas,
+  // servicios, líneas, cobros): repetirlas crea filas de más. Estas otras no
+  // crean ningún registro de negocio — repetirlas no deja rastro duplicado en
+  // ninguna hoja operativa — y sin reintento el sistema se vuelve inusable
+  // cuando el backend está lento: el 24/08 la guardia dejó a Mikaela sin poder
+  // iniciar sesión porque `login` tardaba más que el timeout y no reintentaba.
+  const _ACCIONES_REINTENTABLES = [
+    'login', 'logout', 'pingSesion', 'verificarSesion',
+    'guardarPushSub', 'enviarPushStaff', 'getVersion'
+  ];
+
   function _tieneClaveIdempotencia_(data) {
     if (!data) return false;
     for (let i = 0; i < _IDEMPOTENCIA_KEYS.length; i++) {
@@ -265,6 +277,10 @@
       if (Array.isArray(v) ? v.length > 0 : String(v).trim() !== '') return true;
     }
     return false;
+  }
+
+  function _esReintentableSinClave_(action) {
+    return _ACCIONES_REINTENTABLES.indexOf(String(action || '')) >= 0;
   }
 
   // ── apiPost ───────────────────────────────────────────────────────────────
@@ -293,10 +309,10 @@
     if (window._session) data.session = window._session;
     if (window.currentUser && window.currentUser.name) data._who = window.currentUser.name; // pista de diagnóstico (NO autentica): identifica a la chica en el ApiLog aunque falte la sesión
 
-    const _idem = _tieneClaveIdempotencia_(data);
+    const _idem = _tieneClaveIdempotencia_(data) || _esReintentableSinClave_(action);
     const _retriesEfectivo = _idem ? retries : 0;
     if (!_idem && retries > 0) {
-      console.info(`[NX-API] ${action}: sin clave de idempotencia → 0 reintentos (evita escritura duplicada)`);
+      console.info(`[NX-API] ${action}: escritura sin clave de idempotencia → 0 reintentos (evita duplicado)`);
     }
 
     for (let attempt = 0; attempt <= _retriesEfectivo; attempt++) {
@@ -327,7 +343,7 @@
           await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
           // El _t NO se refresca cuando hay clave de idempotencia: cambiarlo
           // altera el payload y puede romper la deduplicación por huella.
-          if (!_idem) data._t = Date.now();
+          if (!_tieneClaveIdempotencia_(data)) data._t = Date.now();
           continue;
         }
         console.error('API Error final:', err);
