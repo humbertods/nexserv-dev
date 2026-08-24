@@ -199,44 +199,107 @@
     });
   }
 
-  async function apiGet(action, params) {
+  // ── apiGet ────────────────────────────────────────────────────────────────
+  // Una lectura es idempotente por naturaleza: repetirla no cambia nada del
+  // estado. Por eso acá el reintento es SEGURO — al revés que en apiPost.
+  // Antes no tenía ni timeout ni reintento: un GET que fallaba moría a la
+  // primera y dejaba la pantalla en «Cargando…» para siempre (paneles de
+  // Central congelados el 24/08). Con el backend intermitente, los mismos
+  // POST se recuperaban al segundo intento mientras los GET no se levantaban
+  // nunca; ése era todo el sesgo que se veía en la consola.
+  async function apiGet(action, params, { retries = 2, timeoutMs = 45000 } = {}) {
     const url = new URL(API_URL);
     url.searchParams.set('action', action);
-    // Cache-busting: agregar timestamp para evitar respuestas cacheadas
-    url.searchParams.set('_t', Date.now().toString());
     if (window._session) url.searchParams.set('session', window._session);
     if (window.currentUser && window.currentUser.name) url.searchParams.set('_who', window.currentUser.name); // pista de diagnóstico (NO autentica): identifica a la chica en el ApiLog aunque falte la sesión
     if (params) Object.keys(params).forEach(k => url.searchParams.set(k, params[k]));
-    const _t0 = Date.now();
-    let _status = 0;
-    _nxLogStart_(action, 'GET', 0, null);
-    try {
-      const res = await fetch(url.toString(), {
-        method: 'GET',
-        redirect: 'follow'
-      });
-      _status = res.status;
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      // Cache-busting por intento: cada uno pide una URL distinta, así ningún
+      // reintento se sirve de una respuesta cacheada del intento fallido.
+      url.searchParams.set('_t', Date.now().toString());
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const _t0 = Date.now();
+      let _status = 0;
+      _nxLogStart_(action, 'GET', attempt, timeoutMs);
+      try {
+        const res = await fetch(url.toString(), {
+          method: 'GET',
+          redirect: 'follow',
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+        _status = res.status;
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        const data = await res.json();
+        _nxLogEnd_(action, 'GET', attempt, _t0, _status, true);
+        return _interceptAuth(data, action);
+      } catch (err) {
+        clearTimeout(timer);
+        _nxLogFail_(action, 'GET', attempt, _t0, _status, err, err && err.name === 'AbortError');
+        if (attempt < retries) {
+          console.warn(`API intento ${attempt + 1} fallido (${action}):`, err.message);
+          await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+          continue;
+        }
+        console.error('API Error:', err);
+        return { error: err.message };
       }
-      const data = await res.json();
-      _nxLogEnd_(action, 'GET', 0, _t0, _status, true);
-      return _interceptAuth(data, action);
-    } catch (err) {
-      _nxLogFail_(action, 'GET', 0, _t0, _status, err, err && err.name === 'AbortError');
-      console.error('API Error:', err);
-      return { error: err.message };
     }
   }
 
-  async function apiPost(action, data, { retries = 2, timeoutMs = 18000 } = {}) {
+  // ── Claves de idempotencia reconocidas por el backend ────────────────────
+  // Un POST que las lleva puede reintentarse sin riesgo: el backend deduplica
+  // por ese id y una segunda ejecución de la MISMA intención no escribe dos
+  // veces. Un POST que NO las lleva es irrepetible.
+  const _IDEMPOTENCIA_KEYS = ['lineRequestId', 'requestId', 'lineRequestIds', 'expectedLineRequestIds'];
+
+  function _tieneClaveIdempotencia_(data) {
+    if (!data) return false;
+    for (let i = 0; i < _IDEMPOTENCIA_KEYS.length; i++) {
+      const v = data[_IDEMPOTENCIA_KEYS[i]];
+      if (v === undefined || v === null) continue;
+      if (Array.isArray(v) ? v.length > 0 : String(v).trim() !== '') return true;
+    }
+    return false;
+  }
+
+  // ── apiPost ───────────────────────────────────────────────────────────────
+  // INCIDENTE 24/08/2026 — clienta duplicada con UN solo click.
+  //
+  // Abortar un POST NO cancela la ejecución del servidor: solo deja de esperar
+  // la respuesta. Con el backend tardando ~32 s y timeoutMs=18000, el cliente
+  // abortaba una escritura que SÍ estaba corriendo, la daba por fallida y
+  // reintentaba. Resultado: un click de Mikaela → dos clientas en LINEAS.
+  // El camino nativo SN no tiene guardia anti-duplicado (GAP_SN_IDEMPOTENCIA_
+  // DEFERRED), así que el reintento no se deduplica: se ejecuta otra vez.
+  //
+  // Dos cambios, ambos en el cliente:
+  //   1. Solo se reintenta si el payload lleva clave de idempotencia. Sin ella,
+  //      `retries` efectivo = 0. Un fallo visible es preferible a un duplicado
+  //      silencioso: el duplicado corrompe la hoja y nadie se entera.
+  //   2. timeoutMs sube a 45000. El 18000 anterior abortaba respuestas buenas
+  //      que llegaban a los 32 s, convirtiendo éxitos en falsos fallos.
+  //
+  // Quien necesite reintento debe ganárselo mandando una clave de idempotencia,
+  // no bajando esta guardia.
+  async function apiPost(action, data, { retries = 2, timeoutMs = 45000 } = {}) {
     if (!data) data = {};
     data.action = action;
     data._t = Date.now();
     if (window._session) data.session = window._session;
     if (window.currentUser && window.currentUser.name) data._who = window.currentUser.name; // pista de diagnóstico (NO autentica): identifica a la chica en el ApiLog aunque falte la sesión
 
-    for (let attempt = 0; attempt <= retries; attempt++) {
+    const _idem = _tieneClaveIdempotencia_(data);
+    const _retriesEfectivo = _idem ? retries : 0;
+    if (!_idem && retries > 0) {
+      console.info(`[NX-API] ${action}: sin clave de idempotencia → 0 reintentos (evita escritura duplicada)`);
+    }
+
+    for (let attempt = 0; attempt <= _retriesEfectivo; attempt++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       const _t0 = Date.now();
@@ -260,12 +323,19 @@
         clearTimeout(timer);
         _nxLogFail_(action, 'POST', attempt, _t0, _status, err, err && err.name === 'AbortError');
         console.warn(`API intento ${attempt + 1} fallido (${action}):`, err.message);
-        if (attempt < retries) {
+        if (attempt < _retriesEfectivo) {
           await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
-          data._t = Date.now();
+          // El _t NO se refresca cuando hay clave de idempotencia: cambiarlo
+          // altera el payload y puede romper la deduplicación por huella.
+          if (!_idem) data._t = Date.now();
           continue;
         }
         console.error('API Error final:', err);
+        // Aviso explícito: la escritura pudo haberse ejecutado igual del lado
+        // del servidor aunque el cliente no viera la respuesta.
+        if (!_idem && err && err.name === 'AbortError') {
+          return { error: err.message, _posibleEscrituraIncierta: true };
+        }
         return { error: err.message };
       }
     }
