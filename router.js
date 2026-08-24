@@ -60,7 +60,16 @@
         try {
           if (typeof refreshStaffQueue === 'function') await refreshStaffQueue('staffHomeRefresh');
         } catch (e) { console.warn('[staffHomeRefresh]', e); }
-      }, 4000);
+        // INC-360 · Fase 1 — CAMBIO 1: 4000ms → 12000ms.
+        // La app web corre bajo UNA sola identidad, así que Central y todas las
+        // staff comparten la misma cuota de ejecuciones simultáneas de Apps
+        // Script. Este intervalo se multiplica por cada chica conectada, así que
+        // era el mayor generador de tráfico del sistema: 15 GET/min por sesión.
+        // Intactas: la carga completa al entrar (loadStaffHome arriba), las
+        // guardas de pantalla activa / document.hidden / modal / refresco en
+        // curso, el clearInterval al salir, y los refrescos explícitos tras cada
+        // acción. Una clienta recién asignada sigue apareciendo sola.
+      }, 12000);
     } else if (window._staffHomeRefresh) {
       clearInterval(window._staffHomeRefresh); window._staffHomeRefresh = null;
     }
@@ -71,7 +80,11 @@
         const el = document.getElementById('ownerHome');
         if (el && el.classList.contains('active')) refreshEstadoSalon();
         else { clearInterval(window._ownerHomeRefresh); window._ownerHomeRefresh = null; }
-      }, 15000);
+        // INC-360 · Fase 1 — CAMBIO 3: 15000ms → 30000ms.
+        // Cada ciclo dispara getListaCompleta + getHistorial (2 GET por vuelta).
+        // Intacta la carga inmediata al entrar (loadOwnerHome arriba) y el
+        // clearInterval al salir de la pantalla.
+      }, 30000);
     } else if (window._ownerHomeRefresh) {
       clearInterval(window._ownerHomeRefresh); window._ownerHomeRefresh = null;
     }
