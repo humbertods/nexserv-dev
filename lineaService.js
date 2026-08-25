@@ -288,10 +288,30 @@
     // Devuelve la MISMA forma que el viejo getAutorizaciones para que
     // renderAuthorizations y los polls del staff funcionen sin cambios.
     listarPropuestasExtra: function() {
-      // El backend acepta sesión firmada y decide el ALCANCE por rol:
-      // admin/owner reciben todas las propuestas; una staff recibe solo las
-      // suyas. Por eso aquí no hay guarda de rol: llamar es seguro para
-      // cualquiera con sesión válida.
+      // ── INTERRUPTOR DE COMPATIBILIDAD CON EL BACKEND ────────────────────
+      // Poner en true SOLO cuando el Apps Script con getAutorizacionesNativas
+      // por alcance esté DESPLEGADO (no basta con guardarlo: hay que publicar
+      // una versión nueva de la implementación).
+      //
+      // Con el backend viejo, esa acción exige rol admin/owner y responde 401
+      // SESION_NO_VALIDA a una staff. El manejador global de api.js interpreta
+      // ese 401 como sesión caída y la manda al login — con el poll cada 8s,
+      // la expulsa en bucle. Por eso, mientras esto sea false, la staff no
+      // llama al endpoint: recibe lista vacía y su extra aprobado le llega
+      // igual por getAtenciones. Lo único que pierde es el badge de
+      // "pendiente" antes de que Central apruebe.
+      //
+      // Central (admin/owner) llama siempre: para ella funciona con ambas
+      // versiones del backend.
+      var PROPUESTAS_STAFF_HABILITADO = false;
+
+      var _rol = String((window.currentUser && (window.currentUser.role || window.currentUser.rol)) || '').toLowerCase();
+      var _esCentral = (_rol === 'admin' || _rol === 'owner' || _rol === 'dueño' || _rol === 'dueno');
+
+      if (!_esCentral && !PROPUESTAS_STAFF_HABILITADO) {
+        return Promise.resolve({ success: true, autorizaciones: [], omitido_por_rol: true });
+      }
+
       return apiGet('getAutorizacionesNativas').then(function(r) {
         if (!r || (r.ok !== true && r.success !== true)) {
           return { success: false, autorizaciones: [], message: (r && (r.message || r.error)) || '' };
