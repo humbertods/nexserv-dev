@@ -1,9 +1,11 @@
 // NEXSERV nexserv-main-3.js — Cobros, facturación, asistencia
 // Depende de: nexserv-main-2.js
 
-  async function approveAuthorization(reqId) {
+  async function approveAuthorization(reqId, ticketRef) {
     try {
-      const result = await apiPost('aprobarAutorizacion', { authId: reqId });
+      // APROBACIÓN 100% LINEAS. reqId es el linea_id de la propuesta;
+      // ticketRef viene de la misma tarjeta que la lista.
+      const result = await LineaService.aprobarExtra(ticketRef, reqId);
       
       if (result.success) {
         // El sync al Sheet lo hace el staff automáticamente cuando recargarAutorizacionesStaff
@@ -18,9 +20,9 @@
     }
   }
   
-  async function rejectAuthorization(reqId) {
+  async function rejectAuthorization(reqId, ticketRef) {
     try {
-      const result = await apiPost('rechazarAutorizacion', { authId: reqId });
+      const result = await LineaService.rechazarExtra(ticketRef, reqId);
       
       if (result.success) {
         alert('✕ Servicio rechazado. El staff será notificado.');
@@ -2801,10 +2803,8 @@
   let _numServiciosAdicionales = 0;
 
   function agregarServicioAdicional() {
-    if (_numServiciosAdicionales >= 4) {
-      alert('Máximo 4 servicios adicionales (5 en total)');
-      return;
-    }
+    // SIN TOPE: el ticket madre admite N líneas. Se eliminó el límite de 4
+    // adicionales para no restringir a Central en la cantidad de servicios.
     _numServiciosAdicionales++;
     const idx = _numServiciosAdicionales;
     const container = document.getElementById('serviciosAdicionalesContainer');
