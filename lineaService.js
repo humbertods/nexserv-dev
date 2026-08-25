@@ -117,7 +117,35 @@
       var esPromo = !esMulti && !!(payload && payload.promoNombre);
 
       if (esMulti) {
-        return apiPost('crearTicketMulti', payload);
+        // TICKET MADRE CON N LÍNEAS — reemplaza la ruta TM.
+        // Un ticket con varios servicios ya no crea un TM- en la hoja legacy
+        // TicketMulti: crea UN ticket madre (SN-) con N líneas en LINEAS, cada
+        // una con su área, su servicio, su monto y su es_promo. Mezcla libre de
+        // promo y regular, misma área repetida N veces, un solo cobro.
+        //
+        // `areas` se traduce a `servicios` (la forma que espera
+        // crearTicketServicioNormalNativo_). Los campos que ya venían —
+        // asignadaA, areaInicial, requestId, secuencia — se conservan tal cual.
+        //
+        // La ruta TM sigue existiendo en el backend, solo que el frontend ya no
+        // la llama. Para volver atrás: cambiar USAR_TICKET_MADRE a false.
+        var USAR_TICKET_MADRE = true;
+        if (!USAR_TICKET_MADRE) return apiPost('crearTicketMulti', payload);
+
+        var _p = {};
+        for (var k in payload) { if (payload.hasOwnProperty(k)) _p[k] = payload[k]; }
+        _p.servicios = payload.areas.map(function (a) {
+          return {
+            area:         a.area,
+            servicio:     a.tentativo || a.servicio || '',
+            monto:        Number(a.precio != null ? a.precio : (a.monto || 0)),
+            montoRegular: Number(a.precioNormal != null ? a.precioNormal
+                                : (a.montoRegular != null ? a.montoRegular : (a.precio || 0))),
+            esPromo:      String(a.tipo || '') === 'promo'
+          };
+        });
+        delete _p.areas;
+        return apiPost('addServicioNormal', _p);
       } else if (esPromo) {
         return apiPost('addServicioPromo', payload);
       } else {
