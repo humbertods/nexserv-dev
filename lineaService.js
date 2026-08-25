@@ -288,6 +288,10 @@
     // Devuelve la MISMA forma que el viejo getAutorizaciones para que
     // renderAuthorizations y los polls del staff funcionen sin cambios.
     listarPropuestasExtra: function() {
+      // El backend acepta sesión firmada y decide el ALCANCE por rol:
+      // admin/owner reciben todas las propuestas; una staff recibe solo las
+      // suyas. Por eso aquí no hay guarda de rol: llamar es seguro para
+      // cualquiera con sesión válida.
       return apiGet('getAutorizacionesNativas').then(function(r) {
         if (!r || (r.ok !== true && r.success !== true)) {
           return { success: false, autorizaciones: [], message: (r && (r.message || r.error)) || '' };
