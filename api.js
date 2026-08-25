@@ -242,6 +242,26 @@
   // siempre pide de nuevo — esto NO es un caché, no guarda respuestas.
   const _getEnVuelo = new Map();
 
+  // ── SEGURIDAD DE FRESCURA ────────────────────────────────────────────────
+  // Reusar una llamada en vuelo es correcto SOLO si nada cambió desde que
+  // arrancó. Varias funciones (ensureIdEsperaFresco) piden getAtenciones
+  // justo para releer el estado DESPUÉS de una escritura; si se les devuelve
+  // una respuesta que salió antes de esa escritura, reciben datos viejos.
+  // Con getAtenciones tardando 5-9 s, esa ventana es enorme: fue lo que dejó
+  // `idEspera` vacío y mandó finalizarAtencion al camino legacy.
+  //
+  // Solución: cada POST que termina incrementa un contador. Una llamada en
+  // vuelo solo se reusa si el contador NO cambió desde que empezó. Así se
+  // sigue deduplicando el caso real —varias vistas montando a la vez— pero
+  // nunca se sirve una lectura anterior a una escritura.
+  //
+  // Además, un tope de antigüedad: pasado _DEDUPE_MAX_MS no se reusa aunque
+  // no haya habido escrituras, por si algún cambio llegó por otra vía.
+  let _mutaciones = 0;
+  const _DEDUPE_MAX_MS = 2000;
+
+  function _marcarMutacion_() { _mutaciones++; }
+
   function _claveGet_(action, params) {
     let k = String(action || '');
     if (params) {
@@ -253,15 +273,24 @@
 
   function apiGet(action, params, opts) {
     const clave = _claveGet_(action, params);
-    const enVuelo = _getEnVuelo.get(clave);
-    if (enVuelo) {
+    const reg = _getEnVuelo.get(clave);
+    if (reg
+        && reg.mutAlIniciar === _mutaciones
+        && (Date.now() - reg.iniciada) < _DEDUPE_MAX_MS) {
       if (ENV === 'dev') console.info('[NX-API-DEDUPE]', action, '— reusa la llamada en vuelo');
-      return enVuelo;
+      return reg.promesa;
     }
-    const p = _apiGetReal(action, params, opts)
-      .finally(function () { _getEnVuelo.delete(clave); });
-    _getEnVuelo.set(clave, p);
-    return p;
+    // No se reusa: o no había ninguna, o hubo una escritura, o es vieja.
+    // Se lanza una nueva y se registra en su lugar.
+    const iniciada = Date.now();
+    const mutAlIniciar = _mutaciones;
+    const promesa = _apiGetReal(action, params, opts)
+      .finally(function () {
+        const actual = _getEnVuelo.get(clave);
+        if (actual && actual.iniciada === iniciada) _getEnVuelo.delete(clave);
+      });
+    _getEnVuelo.set(clave, { promesa: promesa, iniciada: iniciada, mutAlIniciar: mutAlIniciar });
+    return promesa;
   }
 
   async function _apiGetReal(action, params, { retries = 2, timeoutMs = 45000 } = {}) {
@@ -359,7 +388,22 @@
   //
   // Quien necesite reintento debe ganárselo mandando una clave de idempotencia,
   // no bajando esta guardia.
-  async function apiPost(action, data, { retries = 2, timeoutMs = 45000 } = {}) {
+  async function apiPost(action, data, opts) {
+    // Toda escritura invalida las lecturas en vuelo: una respuesta de
+    // getAtenciones que salió ANTES de este POST ya no describe el estado
+    // actual y no debe reusarse. Se marca al ENTRAR (no al salir) porque la
+    // escritura puede aplicarse en el backend aunque la respuesta se pierda.
+    _marcarMutacion_();
+    try {
+      return await _apiPostReal(action, data, opts);
+    } finally {
+      // Y también al terminar: entre el inicio y el fin del POST pudo haber
+      // arrancado una lectura que tampoco refleja el resultado.
+      _marcarMutacion_();
+    }
+  }
+
+  async function _apiPostReal(action, data, { retries = 2, timeoutMs = 45000 } = {}) {
     if (!data) data = {};
     data.action = action;
     data._t = Date.now();
