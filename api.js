@@ -137,6 +137,24 @@
     const code = Number(result.code || 0);
     if (code !== 401 && code !== 403) return result;   // respuesta normal → pasar
     console.warn('[AUTH]', code, action, result.error);
+
+    // ── PERMISO ≠ SESIÓN CAÍDA ───────────────────────────────────────────────
+    // Una acción restringida por ROL devuelve 401/403 aunque la sesión sea
+    // perfectamente válida. Tratarlo como "sesión expirada" expulsaba a la
+    // staff al login: getAutorizacionesNativas exige admin/owner, y como se
+    // consulta en un poll cada 8 s, la sacaba en bucle.
+    //
+    // Para estas acciones el rechazo se devuelve al caller como un resultado
+    // normal (success:false) y NO se muestra el modal. Cualquier OTRA acción
+    // sigue comportándose igual que antes: si la sesión cayó de verdad, el
+    // resto de las llamadas lo detecta y el modal aparece igual.
+    const _ACCIONES_SOLO_PERMISO = [
+      'getAutorizacionesNativas', 'aprobarExtraNativo', 'rechazarExtraNativo'
+    ];
+    if (_ACCIONES_SOLO_PERMISO.indexOf(action) !== -1) {
+      console.warn('[AUTH] rechazo por permiso en "' + action + '" — no se cierra la sesión');
+      return { success: false, ok: false, error: result.error, code: code, _permisoDenegado: true };
+    }
     const es401 = code === 401;
     const titulo = es401 ? 'Sesión expirada' : 'Acceso no autorizado';
     const razon  = String(result.error || '');
@@ -207,7 +225,46 @@
   // Central congelados el 24/08). Con el backend intermitente, los mismos
   // POST se recuperaban al segundo intento mientras los GET no se levantaban
   // nunca; ése era todo el sesgo que se veía en la consola.
-  async function apiGet(action, params, { retries = 2, timeoutMs = 45000 } = {}) {
+  // ── DEDUPLICACIÓN DE GET EN VUELO ─────────────────────────────────────────
+  // Al cargar la pantalla, varias vistas piden lo mismo casi a la vez: en los
+  // logs se ven dos getAtenciones con 100 ms de diferencia, y dos
+  // getServiciosHoy seguidos. Cada uno paga el costo completo en el backend y
+  // compite por el mismo tiempo de ejecución, lo que empuja a los demás contra
+  // el timeout — de ahí los "signal is aborted" y sus reintentos, que a su vez
+  // vuelven a cargar el backend. Círculo vicioso.
+  //
+  // Si ya hay una llamada IDÉNTICA (misma acción y mismos parámetros) en
+  // vuelo, se devuelve ESA promesa en vez de lanzar otra. Todos los callers
+  // reciben el mismo resultado y nadie cambia su código.
+  //
+  // Solo GET: son de lectura y sin efectos. Los POST nunca se deduplican.
+  // La entrada se borra al resolver o fallar, así que un refresco posterior
+  // siempre pide de nuevo — esto NO es un caché, no guarda respuestas.
+  const _getEnVuelo = new Map();
+
+  function _claveGet_(action, params) {
+    let k = String(action || '');
+    if (params) {
+      const ks = Object.keys(params).sort();
+      for (let i = 0; i < ks.length; i++) k += '|' + ks[i] + '=' + String(params[ks[i]]);
+    }
+    return k;
+  }
+
+  function apiGet(action, params, opts) {
+    const clave = _claveGet_(action, params);
+    const enVuelo = _getEnVuelo.get(clave);
+    if (enVuelo) {
+      if (ENV === 'dev') console.info('[NX-API-DEDUPE]', action, '— reusa la llamada en vuelo');
+      return enVuelo;
+    }
+    const p = _apiGetReal(action, params, opts)
+      .finally(function () { _getEnVuelo.delete(clave); });
+    _getEnVuelo.set(clave, p);
+    return p;
+  }
+
+  async function _apiGetReal(action, params, { retries = 2, timeoutMs = 45000 } = {}) {
     const url = new URL(API_URL);
     url.searchParams.set('action', action);
     if (window._session) url.searchParams.set('session', window._session);
