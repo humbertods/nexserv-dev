@@ -2508,7 +2508,16 @@
           tentativo: d.nombre,
           precio: _m,
           precioNormal: _reg,
-          tipo: 'promo'
+          tipo: 'promo',
+          // Nombre del componente y de la promo, transportados APARTE de
+          // `tentativo`. `tentativo` NO se toca: el motor de cobro lo usa para
+          // reconocer el combo (ver comentario arriba). Estos dos campos son
+          // solo para que el backend pueda componer la etiqueta por línea
+          // "Promo (componente)" — ej. "Combo 1 (Depilación de cejas)" —
+          // igual que ya lo hace crearTicketPromoNativo_. Sin ellos, el ticket
+          // madre escribía las N líneas con el nombre de la promo repetido.
+          promoNombre: d.nombre,
+          servicioComponente: String(dv.servicio || dv.area || '')
         };
       });
 
