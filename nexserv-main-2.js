@@ -1074,7 +1074,7 @@
     }
 
     try {
-      const authResult = await apiGet('getAutorizaciones');
+      const authResult = await LineaService.listarPropuestasExtra();
       if (!authResult.success || !authResult.autorizaciones) return;
 
       const staffName = user.name || '';
@@ -1219,7 +1219,7 @@
     if (pendingServices.length === 0) return;
 
     try {
-      const result = await apiGet('getAutorizaciones');
+      const result = await LineaService.listarPropuestasExtra();
 
       if (result.success && result.autorizaciones) {
         const user = window.currentUser;
@@ -2568,7 +2568,7 @@
   let _arrPromos = [];
 
   function addPromoSlot() {
-    if (_arrPromos.length >= 3) { alert('Máximo 3 promos por visita'); return; }
+    // SIN TOPE: N promos por visita, todas dentro del mismo ticket madre.
     _arrPromos.push(null);
     renderPromoSlots();
   }
@@ -2589,7 +2589,7 @@
     const container = document.getElementById('arrPromoSlots');
     if (!container) return;
     const btn = document.getElementById('addPromoBtn');
-    if (btn) btn.style.display = _arrPromos.length >= 3 ? 'none' : 'inline-block';
+    if (btn) btn.style.display = 'inline-block';   // SIN TOPE: N promos por visita
     container.innerHTML = _arrPromos.map((promo, i) => `
       <div style="background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 100%); border-radius: 16px; padding: 14px; margin-bottom: 10px; color: white;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
@@ -3291,8 +3291,8 @@
     });
     cont.querySelectorAll('[data-rm]').forEach(function(el){ el.addEventListener('click', function(){ acRemoveServicio(parseInt(this.getAttribute('data-rm'),10)); }); });
     const addBtn=document.getElementById('acAddBtn');
-    addBtn.textContent='+ Agregar servicio ('+window._acState.servicios.length+'/5)';
-    addBtn.style.display = window._acState.servicios.length>=5 ? 'none' : 'block';
+    addBtn.textContent='+ Agregar servicio ('+window._acState.servicios.length+')';
+    addBtn.style.display = 'block';   // SIN TOPE: N servicios por ticket madre
     acRenderPreview();
   }
   function acFillServicios(i, area, s){
@@ -3330,7 +3330,6 @@
     acRenderPreview();
   }
   function acAddServicio(){
-    if(window._acState.servicios.length>=5) return;
     window._acState.servicios.push({ area:'', servicio:'', precio:0, promoNombre:'', precioPromo:0, precioRegular:0 });
     acRenderServicios();
   }
@@ -4674,8 +4673,8 @@
     console.log('🔍 renderAuthorizations called');
     try {
       // Cargar autorizaciones desde el backend
-      console.log('📡 Calling apiGet(getAutorizaciones)...');
-      const result = await apiGet('getAutorizaciones');
+      console.log('📡 Calling LineaService.listarPropuestasExtra()...');
+      const result = await LineaService.listarPropuestasExtra();
       
       console.log('📥 Backend response:', result);
       
@@ -4726,8 +4725,8 @@
           </div>
           
           <div style="display: flex; gap: 8px;">
-            <button data-action="approve-auth" data-id="${req.id}" style="flex: 1; padding: 12px; background: #28a745; color: white; border: none; border-radius: 12px; font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;">✓ Aprobar</button>
-            <button data-action="reject-auth" data-id="${req.id}" style="flex: 1; padding: 12px; background: #dc3545; color: white; border: none; border-radius: 12px; font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;">✕ Rechazar</button>
+            <button data-action="approve-auth" data-id="${req.id}" data-ticket="${req.ticketRef || req.idEspera || ''}" style="flex: 1; padding: 12px; background: #28a745; color: white; border: none; border-radius: 12px; font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;">✓ Aprobar</button>
+            <button data-action="reject-auth" data-id="${req.id}" data-ticket="${req.ticketRef || req.idEspera || ''}" style="flex: 1; padding: 12px; background: #dc3545; color: white; border: none; border-radius: 12px; font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;">✕ Rechazar</button>
           </div>
         </div>
       `).join('');
@@ -5809,6 +5808,8 @@
     var staff    = target.dataset.staff;
     var cod      = target.dataset.cod      || id;
     var tipo     = target.dataset.tipo     || '';
+    // ticket madre de la propuesta de extra (aprobación nativa por LINEAS)
+    var ticketAt = target.dataset.ticket   || '';
 
     switch (action) {
       case 'esperar-cobro':
@@ -5838,11 +5839,11 @@
         break;
       case 'approve-auth':
         e.stopPropagation();
-        if (typeof approveAuthorization === 'function') approveAuthorization(id);
+        if (typeof approveAuthorization === 'function') approveAuthorization(id, ticketAt);
         break;
       case 'reject-auth':
         e.stopPropagation();
-        if (typeof rejectAuthorization === 'function') rejectAuthorization(id);
+        if (typeof rejectAuthorization === 'function') rejectAuthorization(id, ticketAt);
         break;
       case 'ac-select':
         e.stopPropagation();
