@@ -1768,10 +1768,9 @@
 
   function addServiceToSlot(slot, service) {
     if (!slotServices[slot]) slotServices[slot] = [];
-    if (slotServices[slot].length >= 5) {
-      alert('Máximo 5 servicios por atención');
-      return false;
-    }
+    // SIN TOPE: un ticket madre admite N servicios. El límite de 5 se eliminó
+    // para no restringir a la staff ni a Central en la cantidad de extras que
+    // pueden agregarse a una misma atención. El backend tampoco impone tope.
     slotServices[slot].push(service);
     // Usar renderServicesForSlot para que muestre el badge de estado (pendiente/aprobado)
     // y no sume al total servicios que aun no estan aprobados
@@ -2411,9 +2410,53 @@
         idEspera: _idEsperaSlot
       };
       
-      console.log('📤 Sending to backend:', payload);
-      
-      const result = await apiPost('solicitarAutorizacion', payload);
+      // ── SERVICIO EXTRA 100% LINEAS ────────────────────────────────────
+      // La hoja `Autorizaciones` queda fuera del circuito: la solicitud nace
+      // como una LÍNEA 'propuesta' colgada del ticket madre. El backend exige
+      // `lineaPadre` — el id de MI línea en curso dentro de este ticket — y
+      // valida que la staff solicitante sea la misma que la de esa línea.
+      //
+      // Se toma de slotServices, que ya trae lineaId por componente. Se elige
+      // la primera línea propia con id que NO sea el servicio nuevo ni otra
+      // propuesta pendiente. FAIL CLOSED: sin lineaPadre no se envía nada —
+      // nunca se cae al camino legacy como respaldo.
+      // El backend exige que la línea padre esté EN SERVICIO
+      // (LN4_PADRE_ESTADOS_VALIDOS = ['en_servicio']) y que su staff sea la
+      // solicitante. Con N extras encadenados, la línea en curso cambia: al
+      // pedir el 2º extra la original puede estar ya completada y la que está
+      // en servicio es el 1º extra. Por eso se prefiere explícitamente una
+      // línea en_servicio, y solo si el estado no viajó en el payload se cae
+      // a la última línea propia con id (la más reciente, la que la staff
+      // está atendiendo).
+      const _candidatas = (slotServices[slot] || []).filter(function (sv) {
+        return sv !== service
+            && String(sv.lineaId || '').trim()
+            && sv.status !== 'pendiente' && sv.status !== 'rechazado';
+      });
+      const _enServicio = _candidatas.filter(function (sv) {
+        return String(sv.estado || '') === 'en_servicio';
+      });
+      const _elegida = _enServicio.length
+        ? _enServicio[_enServicio.length - 1]
+        : (_candidatas.length ? _candidatas[_candidatas.length - 1] : null);
+      const _lineaPadre = _elegida ? String(_elegida.lineaId).trim() : '';
+
+      if (!_lineaPadre) {
+        console.error('[sendAuthorizationRequest] sin lineaPadre — no se envía la solicitud (slot ' + slot + ')');
+        alert('No se pudo identificar tu servicio en curso en este ticket. No se envió la solicitud — avisá a Mikaela.');
+        return { success: false, message: 'No se pudo identificar la línea en curso.' };
+      }
+
+      console.log('📤 Sending to backend (LINEAS):', { ticketRef: _idEsperaSlot, lineaPadre: _lineaPadre, payload: payload });
+
+      const result = await LineaService.solicitarExtra({
+        ticketRef:     _idEsperaSlot,
+        lineaPadre:    _lineaPadre,
+        area:          service.area,
+        servicioExtra: service.name,
+        precio:        service.price,
+        nota:          service.note
+      });
       
       console.log('📥 Backend response:', result);
       
