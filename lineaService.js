@@ -248,6 +248,87 @@
       return apiPost('asignarServicioNormal', opts);
     },
 
+    // ==========================================================
+    // SERVICIO EXTRA DE STAFF — 100% LINEAS
+    // ----------------------------------------------------------
+    // La hoja `Autorizaciones` queda FUERA del circuito. La solicitud nace
+    // como una LÍNEA en estado 'propuesta' / auth 'pendiente' colgada del
+    // ticket madre, y la aprobación la libera sobre ese mismo ticket. No hay
+    // segundo registro en ninguna otra pestaña.
+    //
+    // Los tres métodos traducen entre la forma nativa (propuestas / linea_id)
+    // y la forma que ya consumen las vistas (autorizaciones / estado
+    // 'pendiente'), para no reescribir el render de Central.
+    // ==========================================================
+
+    // solicitarExtra({ ticketRef, lineaPadre, area, servicioExtra, precio, nota })
+    // `staff` NO se envía: el backend la inyecta desde la sesión firmada.
+    solicitarExtra: function(opts) {
+      var lrid = 'EXTRA-' + String(opts.ticketRef || '').replace(/[^A-Za-z0-9_-]/g, '')
+               + '-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+      return apiPost('solicitarExtraStaffNativo', {
+        ticketRef:     opts.ticketRef,
+        lineaPadre:    opts.lineaPadre,
+        area:          opts.area,
+        servicioExtra: opts.servicioExtra,
+        precio:        Number(opts.precio || 0),
+        lineRequestId: lrid,
+        obs:           opts.nota || ''
+      }).then(function(r) {
+        // Normalizar al contrato {success, authId} que espera el caller.
+        var ok = !!(r && (r.ok === true || r.success === true));
+        return { success: ok, authId: (r && (r.linea_id || r.lineaId)) || '',
+                 lineaId: (r && (r.linea_id || r.lineaId)) || '',
+                 ticketRef: (r && r.ticket_ref) || opts.ticketRef,
+                 message: (r && (r.message || r.error)) || '' };
+      });
+    },
+
+    // listarPropuestasExtra() → { success, autorizaciones:[...] }
+    // Devuelve la MISMA forma que el viejo getAutorizaciones para que
+    // renderAuthorizations y los polls del staff funcionen sin cambios.
+    listarPropuestasExtra: function() {
+      return apiGet('getAutorizacionesNativas').then(function(r) {
+        if (!r || (r.ok !== true && r.success !== true)) {
+          return { success: false, autorizaciones: [], message: (r && (r.message || r.error)) || '' };
+        }
+        var lista = (r.propuestas || []).map(function(p) {
+          // 'propuesta' + auth 'pendiente' → estado 'pendiente' (lo que filtran las vistas).
+          // 'esperando' + auth 'aprobada'  → 'aprobado'. 'anulado' → 'rechazado'.
+          var est = 'pendiente';
+          if (p.estado === 'anulado') est = 'rechazado';
+          else if (p.authEstado === 'aprobada') est = 'aprobado';
+          else if (p.authEstado === 'pendiente') est = 'pendiente';
+          return {
+            id: p.id, authId: p.id, lineaId: p.id, lineaPadre: p.lineaPadre,
+            ticketRef: p.ticketRef, idEspera: p.ticketRef, visita: p.visita,
+            clienteCodigo: p.clienteCodigo, clienteNombre: p.clienteNombre,
+            staffNombre: p.staffNombre, servicioNombre: p.servicioNombre,
+            servicioArea: p.servicioArea, servicioPrecio: p.servicioPrecio,
+            nota: p.nota, estado: est, creada: p.creada, actualizada: p.actualizada
+          };
+        });
+        return { success: true, autorizaciones: lista };
+      });
+    },
+
+    // aprobarExtra(ticketRef, lineaId) / rechazarExtra(ticketRef, lineaId)
+    aprobarExtra: function(ticketRef, lineaId) {
+      return apiPost('aprobarExtraNativo', { ticketRef: ticketRef, lineaId: lineaId })
+        .then(function(r) {
+          return { success: !!(r && (r.ok === true || r.success === true)),
+                   message: (r && (r.message || r.error)) || '' };
+        });
+    },
+
+    rechazarExtra: function(ticketRef, lineaId) {
+      return apiPost('rechazarExtraNativo', { ticketRef: ticketRef, lineaId: lineaId })
+        .then(function(r) {
+          return { success: !!(r && (r.ok === true || r.success === true)),
+                   message: (r && (r.message || r.error)) || '' };
+        });
+    },
+
     // ----------------------------------------------------------
     // asignarYIniciarLinea(ticketRef, lineaId)
     // D7.1 P6-B FASE 3 — "Yo sigo": reclama UNA línea huérfana (esperando,
