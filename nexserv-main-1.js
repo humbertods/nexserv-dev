@@ -1405,7 +1405,8 @@
           return { name: sd.servicio || sd.nombre || sd.name || '',
                    price: Number(sd.monto || sd.precio || sd.price || 0),
                    area: sd.area || a.area || '',
-                   lineaId: String(sd.id || sd.lineaId || '') };
+                   lineaId: String(sd.id || sd.lineaId || ''),
+                   estado: String(sd.estado || '') };
         });
         renderServicesForSlot(slot);
         var _totRest = slotServices[slot].reduce(function (x, v) { return x + Number(v.price || 0); }, 0);
@@ -1630,7 +1631,8 @@
               slotServices[1] = _mias1.map(function (sd) {
                 return { name: sd.servicio || sd.nombre || sd.name,
                          price: Number(sd.monto || sd.precio || sd.price || 0),
-                         area: sd.area || a1.area || '', lineaId: String(sd.id || '') };
+                         area: sd.area || a1.area || '', lineaId: String(sd.id || ''),
+                         estado: String(sd.estado || '') };
               });
             }
             try { renderServicesForSlot(1); } catch (e1n) {}
@@ -1694,7 +1696,8 @@
                   slotServices[2] = _mias2.map(function (sd) {
                     return { name: sd.servicio || sd.name,
                              price: Number(sd.monto || sd.price || 0),
-                             area: sd.area || a2.area || '', lineaId: String(sd.id || '') };
+                             area: sd.area || a2.area || '', lineaId: String(sd.id || ''),
+                             estado: String(sd.estado || '') };
                   });
                 }
               } else if (a2.promoNombre && a2.promoNombre.trim() !== '') {
@@ -3701,7 +3704,8 @@
               slotServices[1] = _miasNat1.map(function (sd) {
                 return { name: sd.servicio || sd.nombre || sd.name,
                          price: Number(sd.monto || sd.precio || sd.price || 0),
-                         area: sd.area || a.area || '', lineaId: String(sd.id || '') };
+                         area: sd.area || a.area || '', lineaId: String(sd.id || ''),
+                         estado: String(sd.estado || '') };
               });
               var _totNat1 = slotServices[1].reduce(function (x, v) { return x + Number(v.price || 0); }, 0);
               try { renderServicesForSlot(1); } catch (eR1) {}
@@ -4086,7 +4090,8 @@
               slotServices[2] = _miasNat2.map(function (sd) {
                 return { name: sd.servicio || sd.nombre || sd.name,
                          price: Number(sd.monto || sd.precio || sd.price || 0),
-                         area: sd.area || a.area || '', lineaId: String(sd.id || '') };
+                         area: sd.area || a.area || '', lineaId: String(sd.id || ''),
+                         estado: String(sd.estado || '') };
               });
               var _totNat2 = slotServices[2].reduce(function (x, v) { return x + Number(v.price || 0); }, 0);
               try { renderServicesForSlot(2); } catch (eR2) {}
