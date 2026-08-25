@@ -141,7 +141,12 @@
             monto:        Number(a.precio != null ? a.precio : (a.monto || 0)),
             montoRegular: Number(a.precioNormal != null ? a.precioNormal
                                 : (a.montoRegular != null ? a.montoRegular : (a.precio || 0))),
-            esPromo:      String(a.tipo || '') === 'promo'
+            esPromo:      String(a.tipo || '') === 'promo',
+            // Para que el backend componga "Promo (componente)" por línea.
+            // `servicio` sigue llevando `tentativo`, que es lo que el motor de
+            // cobro reconoce como combo — no se sustituye, se acompaña.
+            promoNombre:        a.promoNombre || '',
+            servicioComponente: a.servicioComponente || ''
           };
         });
         delete _p.areas;
