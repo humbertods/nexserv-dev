@@ -2420,26 +2420,53 @@
       // la primera línea propia con id que NO sea el servicio nuevo ni otra
       // propuesta pendiente. FAIL CLOSED: sin lineaPadre no se envía nada —
       // nunca se cae al camino legacy como respaldo.
+      // ── LÍNEA PADRE — se resuelve contra el BACKEND, no contra el estado
+      // del frontend ────────────────────────────────────────────────────────
       // El backend exige que la línea padre esté EN SERVICIO
       // (LN4_PADRE_ESTADOS_VALIDOS = ['en_servicio']) y que su staff sea la
-      // solicitante. Con N extras encadenados, la línea en curso cambia: al
-      // pedir el 2º extra la original puede estar ya completada y la que está
-      // en servicio es el 1º extra. Por eso se prefiere explícitamente una
-      // línea en_servicio, y solo si el estado no viajó en el payload se cae
-      // a la última línea propia con id (la más reciente, la que la staff
-      // está atendiendo).
-      const _candidatas = (slotServices[slot] || []).filter(function (sv) {
-        return sv !== service
-            && String(sv.lineaId || '').trim()
-            && sv.status !== 'pendiente' && sv.status !== 'rechazado';
-      });
-      const _enServicio = _candidatas.filter(function (sv) {
-        return String(sv.estado || '') === 'en_servicio';
-      });
-      const _elegida = _enServicio.length
-        ? _enServicio[_enServicio.length - 1]
-        : (_candidatas.length ? _candidatas[_candidatas.length - 1] : null);
-      const _lineaPadre = _elegida ? String(_elegida.lineaId).trim() : '';
+      // solicitante.
+      //
+      // ANTES se buscaba en slotServices, pero varios de los mapeos que lo
+      // construyen (nexserv-main-1.js) NO incluyen lineaId — según por dónde
+      // se haya cargado la atención, el campo simplemente no existe. Eso
+      // bloqueaba la solicitud con "sin lineaPadre" en tickets perfectamente
+      // válidos.
+      //
+      // Ahora se pregunta a getTicketLineas, que devuelve las líneas activas
+      // del ticket con su id, estado y staff. Es la fuente de verdad y no
+      // depende de cómo se pobló la pantalla. slotServices queda solo como
+      // respaldo por si la consulta falla.
+      let _lineaPadre = '';
+      const _miNombre = String((user && user.name) || '').trim().toLowerCase();
+      try {
+        const _rTL = await apiGet('getTicketLineas', { ticketRef: _idEsperaSlot });
+        const _activas = (_rTL && _rTL.success && Array.isArray(_rTL.lineasActivas))
+          ? _rTL.lineasActivas : [];
+        // Mi línea en curso en este ticket. Si hubiera varias (extras
+        // encadenados), la última es la que estoy atendiendo ahora.
+        const _mias = _activas.filter(function (l) {
+          return String(l.estado || '') === 'en_servicio'
+              && String(l.staff || '').trim().toLowerCase() === _miNombre;
+        });
+        if (_mias.length) _lineaPadre = String(_mias[_mias.length - 1].id || '').trim();
+        console.log('[sendAuthorizationRequest] lineaPadre desde backend:', _lineaPadre,
+                    '· activas:', _activas.length, '· mías en servicio:', _mias.length);
+      } catch (eTL) {
+        console.warn('[sendAuthorizationRequest] getTicketLineas falló:', eTL);
+      }
+
+      // Respaldo: slotServices, para los casos en que sí trae lineaId.
+      if (!_lineaPadre) {
+        const _cand = (slotServices[slot] || []).filter(function (sv) {
+          return sv !== service
+              && String(sv.lineaId || '').trim()
+              && sv.status !== 'pendiente' && sv.status !== 'rechazado';
+        });
+        const _enSrv = _cand.filter(function (sv) { return String(sv.estado || '') === 'en_servicio'; });
+        const _el = _enSrv.length ? _enSrv[_enSrv.length - 1]
+                                  : (_cand.length ? _cand[_cand.length - 1] : null);
+        if (_el) _lineaPadre = String(_el.lineaId).trim();
+      }
 
       if (!_lineaPadre) {
         console.error('[sendAuthorizationRequest] sin lineaPadre — no se envía la solicitud (slot ' + slot + ')');
