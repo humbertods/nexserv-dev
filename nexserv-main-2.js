@@ -1094,9 +1094,25 @@
           });
           if (_cambio) {
             console.log('[autorizaciones] resuelto desde getTicketLineas — sin consultar a Central');
-            // Mismo repintado que usa el camino de abajo cuando detecta cambios.
+            // Repintado + recálculo del total. Un extra aprobado se suma al
+            // ticket en el acto: la staff sigue trabajando sobre la misma
+            // clienta y el monto tiene que reflejarlo sin que ella recargue.
             renderServicesForSlot(slotNum);
             try { updateFinishButtons(slotNum); } catch (eUFB) {}
+            try {
+              // Mismo cálculo que usa restaurarServiciosNormalesSlot
+              // (nexserv-main-1.js:1434-1436): suma de slotServices al
+              // elemento as{slot}Total, más el contador de servicios.
+              // Un extra aprobado ya cuenta: la staff sigue con la misma
+              // clienta y el ticket vale más desde este instante.
+              var _totSlot = (slotServices[slotNum] || [])
+                .filter(function (v) { return v.status !== 'rechazado'; })
+                .reduce(function (a, v) { return a + Number(v.price || 0); }, 0);
+              var _elTot = document.getElementById('as' + slotNum + 'Total');
+              if (_elTot) _elTot.textContent = '$' + _totSlot;
+              var _elCnt = document.getElementById('as' + slotNum + 'SvcCount');
+              if (_elCnt) _elCnt.textContent = String((slotServices[slotNum] || []).length);
+            } catch (eRT) { console.warn('[autorizaciones] recálculo de total falló:', eRT); }
             return;   // ya se resolvió: no hace falta el endpoint de Central
           }
         }
