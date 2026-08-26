@@ -2488,8 +2488,14 @@
       console.log('📥 Backend response:', result);
       
       if (result.success) {
-        // Guardar ID de autorización en el servicio
-        service.authId = result.authId;
+        // Guardar ID de autorización en el servicio. Con el camino nativo,
+        // authId ES el id de la LÍNEA propuesta (L-xxxx) — el mismo que
+        // getTicketLineas devolverá cuando Central la apruebe. Se guarda
+        // también el ticket madre para poder consultarla sin pasar por el
+        // endpoint de Central.
+        service.authId    = result.authId;
+        service.lineaId   = result.lineaId || result.authId;
+        service.ticketRef = result.ticketRef || _idEsperaSlot;
         console.log('✅ Solicitud de autorización enviada:', result.authId);
         // Avisar a Mikaela por push: antes la solicitud solo aparecía si ella
         // estaba mirando el polling; ahora le llega notificación aunque tenga la app cerrada.
