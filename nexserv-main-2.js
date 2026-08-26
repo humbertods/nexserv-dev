@@ -1074,6 +1074,34 @@
     }
 
     try {
+      // ── Resolver primero por el PROPIO ticket (sin guard de rol) ─────────
+      // getTicketLineas dice si cada propuesta ya fue aprobada o rechazada.
+      // Es la vía que NO depende de getAutorizacionesNativas, que exige rol
+      // admin/owner y devolvía 401 en bucle a la staff, dejándole la pantalla
+      // colgada esperando una aprobación que ya había ocurrido.
+      const _pendientesLocales = (slotServices[slotNum] || [])
+        .filter(function (sv) { return sv.status === 'pendiente' && sv.lineaId && sv.ticketRef; });
+
+      if (_pendientesLocales.length) {
+        const _ref = _pendientesLocales[0].ticketRef;
+        const _est = await LineaService.estadoPropuestasDeTicket(_ref);
+        if (_est.success) {
+          let _cambio = false;
+          _pendientesLocales.forEach(function (sv) {
+            const _e = _est.porLinea[String(sv.lineaId)];
+            if (_e === 'aprobado') { sv.status = 'aprobado'; _cambio = true; }
+            else if (_e === 'rechazado') { sv.status = 'rechazado'; _cambio = true; }
+          });
+          if (_cambio) {
+            console.log('[autorizaciones] resuelto desde getTicketLineas — sin consultar a Central');
+            // Mismo repintado que usa el camino de abajo cuando detecta cambios.
+            renderServicesForSlot(slotNum);
+            try { updateFinishButtons(slotNum); } catch (eUFB) {}
+            return;   // ya se resolvió: no hace falta el endpoint de Central
+          }
+        }
+      }
+
       const authResult = await LineaService.listarPropuestasExtra();
       if (!authResult.success || !authResult.autorizaciones) return;
 
