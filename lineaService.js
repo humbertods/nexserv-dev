@@ -323,6 +323,35 @@
       });
     },
 
+    // estadoPropuestasDeTicket(ticketRef) → { success, porLinea: {L-xxxx: 'aprobado'|'rechazado'|'pendiente'} }
+    // ----------------------------------------------------------
+    // Fuente de verdad para la STAFF, sin depender de un endpoint de Central.
+    //
+    // getTicketLineas NO tiene guard de rol y devuelve las líneas del ticket
+    // separadas en activas e históricas. Una propuesta pendiente vive en
+    // estado 'propuesta', que no está en ninguna de las dos listas — así que
+    // la ausencia ES la señal de "sigue pendiente". Si aparece entre las
+    // activas, Central la aprobó; si aparece anulada, la rechazó.
+    //
+    // Esto reemplaza al poll contra getAutorizacionesNativas, que exige rol
+    // admin/owner: con el backend viejo devolvía 401 en bucle cada 8s y la
+    // staff nunca se enteraba de la aprobación, dejando su pantalla colgada.
+    estadoPropuestasDeTicket: function(ticketRef) {
+      return apiGet('getTicketLineas', { ticketRef: ticketRef || '' })
+        .then(function(r) {
+          if (!r || r.success !== true) return { success: false, porLinea: {} };
+          var porLinea = {};
+          (r.lineasActivas || []).forEach(function(l) {
+            porLinea[String(l.id || '')] = 'aprobado';
+          });
+          (r.lineasHistoricas || []).forEach(function(l) {
+            if (String(l.estado || '') === 'anulado') porLinea[String(l.id || '')] = 'rechazado';
+          });
+          return { success: true, porLinea: porLinea };
+        })
+        .catch(function() { return { success: false, porLinea: {} }; });
+    },
+
     // aprobarExtra(ticketRef, lineaId) / rechazarExtra(ticketRef, lineaId)
     aprobarExtra: function(ticketRef, lineaId) {
       return apiPost('aprobarExtraNativo', { ticketRef: ticketRef, lineaId: lineaId })
