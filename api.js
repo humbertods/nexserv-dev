@@ -478,9 +478,26 @@
   let CATALOGO = { cejas: [], depilacion: [], pestanas: [], retiro_lifting: [], facial: [] };
   let CATALOGO_LOADED = false;
 
-  async function ensureCatalogoLoaded() {
-    if (CATALOGO_LOADED) return;
-    if (!window._session) return; // sin sesión no pedimos catálogo (evita 'sin credenciales' pre-login)
+  // Promesa en vuelo de la carga del catálogo. La bandera CATALOGO_LOADED se
+  // marca DESPUÉS del await, así que dos llamadas concurrentes veían ambas
+  // `false`, seguían las dos y procesaban el catálogo dos veces (de ahí el
+  // "Catalogo cargado" duplicado en consola). El apiGet deduplicado colapsa la
+  // red a un solo viaje, pero el parseo igual corría dos veces.
+  //
+  // Memorizando la PROMESA, la segunda llamada espera a la primera en vez de
+  // arrancar otra. Se libera si falla, para que un reintento posterior pueda
+  // volver a intentarlo.
+  let _catalogoEnVuelo = null;
+
+  function ensureCatalogoLoaded() {
+    if (CATALOGO_LOADED) return Promise.resolve();
+    if (!window._session) return Promise.resolve(); // sin sesión no pedimos catálogo (evita 'sin credenciales' pre-login)
+    if (_catalogoEnVuelo) return _catalogoEnVuelo;
+    _catalogoEnVuelo = _cargarCatalogoReal().finally(function () { _catalogoEnVuelo = null; });
+    return _catalogoEnVuelo;
+  }
+
+  async function _cargarCatalogoReal() {
     try {
       const result = await apiGet('getCatalogo');
       if (result.success && result.servicios) {
