@@ -1543,64 +1543,16 @@
         }
         return { servicio: (p.servicio || p.area || ''), area: (p.area || myArea), monto: _val, montoRegular: _reg, regular: _reg };
       });
-      // ── FLUJO NATIVO ──────────────────────────────────────────────────
-      // Antes esto llamaba a 'aplicarPromoStaff', un atajo que creaba las
-      // líneas a mano y se olvidaba de campos que el motor exige después:
-      // auth_estado, origen, ticket_ref, puesto_trabajo y los marcadores
-      // NATIVE_*. Cada uno se fue descubriendo al fallar el paso siguiente
-      // ("No se pudo finalizar"), y el último —los marcadores— rompía la
-      // validación del ticket COMPLETO, no solo de la línea.
-      //
-      // 'sustituirServicioPorPromoStaffNativa' es el flujo nativo real: valida
-      // en fases, crea los componentes con el contrato completo, anula la
-      // línea origen solo al final y compensa si algo falla a mitad.
-      //
-      // Además necesita `lineaOrigenId`, lo que elimina de paso dos riesgos
-      // del camino viejo: identificaba la línea a sustituir como "la primera
-      // activa de esta staff en el ticket" (mal si la staff tiene 2 servicios)
-      // y tenía un respaldo por código de clienta que podía cruzar tickets.
-      (async function () {
-        // Mi línea en curso en este ticket — mismo patrón que ya usa
-        // sendAuthorizationRequest para resolver la línea padre de un extra.
-        let _lineaOrigenId = '';
-        const _miNombrePromo = String((user && user.name) || '').trim().toLowerCase();
-        try {
-          const _rTLp = await apiGet('getTicketLineas', { ticketRef: _idEsperaPromo });
-          const _actP = (_rTLp && _rTLp.success && Array.isArray(_rTLp.lineasActivas))
-            ? _rTLp.lineasActivas : [];
-          const _miasP = _actP.filter(function (l) {
-            return String(l.estado || '') === 'en_servicio'
-                && String(l.staff || '').trim().toLowerCase() === _miNombrePromo;
-          });
-          if (_miasP.length) _lineaOrigenId = String(_miasP[_miasP.length - 1].id || '').trim();
-        } catch (eTLp) {
-          console.warn('⚠ No se pudo resolver la línea origen de la promo:', eTLp);
-        }
-
-        if (!_lineaOrigenId) {
-          console.warn('⚠ Sin línea origen: no se aplica la promo en LINEAS.');
-          alert('No se pudo identificar el servicio a cambiar. Actualizá la pantalla e intentá de nuevo.');
-          return;
-        }
-
-        try {
-          const r = await apiPost('sustituirServicioPorPromoStaffNativa', {
-            ticketRef       : _idEsperaPromo,
-            lineaOrigenId   : _lineaOrigenId,
-            promoCatalogoId : String(promo.id || ''),
-            // Idempotencia: un reintento con el mismo id no duplica las líneas.
-            requestId       : 'PROMO-' + _idEsperaPromo + '-' + _lineaOrigenId + '-' + Date.now()
-          });
-          if (r && r.ok) {
-            console.log('✅ Promo aplicada (flujo nativo):', r);
-          } else {
-            console.warn('⚠ La promo no se aplicó:', r);
-            alert('No se pudo aplicar la promo: ' + ((r && (r.error || r.message)) || 'error desconocido'));
-          }
-        } catch (e) {
-          console.warn('⚠ Error aplicando la promo:', e);
-        }
-      })();
+      apiPost('aplicarPromoStaff', {
+        idEspera      : _idEsperaPromo,
+        chicaNombre   : user?.name || '',
+        clienteNombre : clientName,
+        clienteCodigo : slot === 1 ? (window._as1Client || '') : (window._as2Client || ''),
+        promoNombre   : promo.name,
+        precioRegular : String(promo.regular || promo.price || myPrice),
+        partes        : JSON.stringify(_partes)
+      }).then(function (r) { console.log('✅ Promo registrada (anular original + crear', (r && r.creadas) || 0, 'líneas):', r); })
+        .catch(function (e) { console.warn('⚠ Error registrando promo:', e); });
     }
 
     // Si la promo incluye áreas que esta staff NO hace, avisar a Mikaela del cambio
