@@ -3189,15 +3189,40 @@
       const idEx = window._extraPromoTicketId;
       const firstDiv = (promo.division && promo.division[0]) ? promo.division[0] : null;
       try {
-        const rEx = await apiPost('agregarPromoExtra', {
-          idEspera: idEx,
-          promoNombre: promo.name,
-          precioPromo: promo.price,
-          precioRegular: promo.regular,
-          area: firstDiv ? firstDiv.area : '',
-          precioMiArea: firstDiv ? firstDiv.monto : promo.price,
-          chica: chica,
-          observaciones: (document.getElementById('assignPromoNota') || {}).value || ''
+        // Camino NATIVO. El anterior (agregarPromoExtra) resolvia la clienta
+        // por prefijo contra la hoja ServicioNormal, donde los tickets nativos
+        // no existen -> "No se encontro la clienta del ticket".
+        //
+        // El frontend NO manda precios, areas ni servicios: el backend resuelve
+        // la division desde Paquetes. Solo manda la identidad de staff por
+        // componente, posicional contra esa division.
+        //
+        // Contrato de asignacion: la staff que Central asigna arranca el PRIMER
+        // componente; los demas quedan con staff vacia -> estado 'esperando',
+        // pendientes de asignar en una vuelta posterior.
+        //
+        // modoExtra='POR_EJECUTAR' devuelve el ticket a 'en_atencion', que es lo
+        // que permite repetir la operacion N veces.
+        const _divEx = Array.isArray(promo.division) ? promo.division : [];
+        if (_divEx.length === 0) {
+          window._extraPromoTicketId = null;
+          alert('\u26a0\ufe0f Esta promo no tiene division configurada. Avisa a soporte.');
+          return;
+        }
+        const _componentesEx = _divEx.map(function (d, i) {
+          return { staff: (i === 0) ? chica : '', lineaPadre: '' };
+        });
+        // requestId: solo A-Za-z0-9_- (contrato _lnValidarLineRequestId_).
+        const _rqEx = 'PROMOEX-' + String(idEx).replace(/[^A-Za-z0-9_-]/g, '')
+                    + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+
+        const rEx = await apiPost('agregarPromoExtraMikaelaNativa', {
+          ticketRef      : idEx,
+          promoCatalogoId: promo.name,
+          modoExtra      : 'POR_EJECUTAR',
+          requestId      : _rqEx,
+          componentes    : _componentesEx,
+          obs            : (document.getElementById('assignPromoNota') || {}).value || ''
         });
         window._extraPromoTicketId = null;
         if (rEx && rEx.success) {
