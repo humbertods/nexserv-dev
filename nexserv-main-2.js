@@ -3225,8 +3225,10 @@
           obs            : (document.getElementById('assignPromoNota') || {}).value || ''
         });
         window._extraPromoTicketId = null;
-        if (rEx && rEx.success) {
-          const msg = '✓ Promo extra "' + promo.name + '" agregada como ticket aparte → ' + chica;
+        // El handler nativo responde { ok:true, ... }; el legacy respondia
+        // { success:true }. Se aceptan ambos para no depender de cual conteste.
+        if (rEx && (rEx.ok || rEx.success)) {
+          const msg = '✓ Promo "' + promo.name + '" agregada al ticket → ' + chica;
           if (typeof showToast === 'function') showToast(msg); else alert(msg);
           closeModal();
           loadMikaelaHome();
