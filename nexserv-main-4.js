@@ -1950,7 +1950,25 @@
     // La fuente viene de a.fuenteReal (backend/TicketsFuente); jamás se
     // infiere por prefijo del idEspera.
     // ══════════════════════════════════════════════════════════════════════
-    const fuenteCanonica = window['_as' + slot + 'FuenteCanonica'];
+    // _as{slot}FuenteCanonica nunca fue poblada por nadie: se leia aqui y no se
+    // escribia en ningun archivo, asi que esta rama nativa era INALCANZABLE y el
+    // guard de abajo bloqueaba siempre. Se deriva ahora de _esSlotNativoLineas,
+    // que ya es la verdad usada por el modal de confirmacion y es monotona.
+    //
+    // Solo se resuelve 'LINEAS'. Los tickets NO nativos siguen sin valor y el
+    // guard los sigue bloqueando igual que hasta hoy: NO se enciende la rama
+    // LEGACY, que es otro escritor completo (updateServiciosAtencion) y esta
+    // fuera del alcance de este cambio.
+    let fuenteCanonica = window['_as' + slot + 'FuenteCanonica'];
+    if (!fuenteCanonica) {
+      try {
+        if (typeof window._esSlotNativoLineas === 'function' &&
+            window._esSlotNativoLineas(slot)) {
+          fuenteCanonica = 'LINEAS';
+          window['_as' + slot + 'FuenteCanonica'] = 'LINEAS';
+        }
+      } catch (e) { /* fail closed: queda sin valor y el guard bloquea */ }
+    }
 
     if (fuenteCanonica !== 'LINEAS' && fuenteCanonica !== 'LEGACY') {
       // FAIL CLOSED: cero escritores. No se toca slotServices, activePromos,
