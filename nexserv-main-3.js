@@ -2632,9 +2632,21 @@
 
       // Actualizar precio del slot actual con el monto de SU división específica
       const montoMio = Number(divs[divMatchIdx].monto || 0) || Number(divs[0].monto || 0);
+      // El REGULAR del componente sale de la misma division, no del monto de
+      // promo. Antes se hacia precioNormal = montoMio, es decir se pisaba el
+      // regular con el precio promocional: para Combo 2 (monto 18 / regular 21)
+      // precioNormal quedaba en 18. Ese valor viaja como precioRegular al
+      // backend, que lo compara contra la suma de los regulares de la division
+      // (21) y corta con PROMO_COMPONENT_TOTAL_MISMATCH.
+      // Nota: la linea 2472 (svc.precioNormal = d.regular || d.precio) ya habia
+      // dejado el valor correcto; esta lo sobrescribia.
+      const regularMio = Number(divs[divMatchIdx].regular || 0) ||
+                         Number(divs[0].regular || 0);
       if (montoMio > 0 && svc) {
         svc.precio = montoMio;
-        svc.precioNormal = montoMio;
+        // Fallback a montoMio solo si la division no trae regular: es el
+        // comportamiento anterior, y sin regular no hay dato mejor disponible.
+        svc.precioNormal = (regularMio > 0) ? regularMio : montoMio;
       }
 
       // Mostrar info: área de esta staff y su precio
