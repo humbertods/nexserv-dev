@@ -1451,8 +1451,30 @@
     // Agregar servicio de promo a slotServices.
     // _yaEnLinea: la promo se registra como sus propias líneas en LINEAS (aplicarPromoStaff),
     // así que este renglón es SOLO para mostrar — no debe re-sincronizarse al ticket.
+    // Nombre con desglose del componente, igual que el backend: el area de la
+    // staff identifica que parte del combo le toca. Antes se mostraba solo
+    // `promo.name` ("Combo 6") y el panel no distinguia los componentes,
+    // aunque el sheet y Central si los mostraran completos.
+    // Solo afecta lo que se dibuja en esta sesion: al recargar, el nombre sale
+    // de la linea ya guardada.
+    const _compPromo = (function () {
+      try {
+        const _divs = Array.isArray(promo.division) ? promo.division : [];
+        const _norm = s => String(s || '').toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const _mia = _divs.find(d => _norm(d.area).indexOf(_norm(myArea)) >= 0
+                                  || _norm(myArea).indexOf(_norm(d.area)) >= 0);
+        return String((_mia && (_mia.servicio || _mia.area)) || '').trim();
+      } catch (e) { return ''; }
+    })();
+    const _yaEnvProm = _compPromo.indexOf(promo.name + ' (') === 0
+                    && _compPromo.charAt(_compPromo.length - 1) === ')';
+    const _nombrePromo = !_compPromo ? promo.name
+                       : (_yaEnvProm ? _compPromo
+                                     : promo.name + ' (' + _compPromo + ')');
+
     const servicioPromo = {
-      name: promo.name,
+      name: _nombrePromo,
       area: myArea,
       price: myPrice,
       esPromo: true,
