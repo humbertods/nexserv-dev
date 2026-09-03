@@ -714,6 +714,14 @@
     // ── TICKET MULTI ─────────────────────────────────────────
     const _idEsperaSlot = slot1 ? (window._as1IdEspera || '') : (window._as2IdEspera || '');
 
+    // ══════════════════════════════════════════════════════════════════════
+    // R.5 · BLOQUE DE DECISIÓN POST-PARTE — TICKET NATIVO LINEAS
+    // Copiado LITERALMENTE del DEV aprobado. Va ANTES de las ramas por
+    // prefijo: un ticket nativo comparte prefijo con el legacy, así que
+    // decidir por prefijo lo mandaría al flujo viejo. La condición es
+    // _esSlotNativoLineas(slot) — fuente real, nunca prefijo.
+    // Un ticket legacy NUNCA entra acá: cae a las ramas de abajo intactas.
+    // ══════════════════════════════════════════════════════════════════════
     // ── SP NATIVO (fuente LINEAS) ────────────────────────────────────────────
     // Va ANTES de la rama SP- legacy: un ticket nativo comparte prefijo 'SP-'
     // pero su verdad está en LINEAS, no en la hoja ServicioPromo. Decidir por
@@ -779,11 +787,22 @@
           if (window['_as' + _slotIdx + 'PintaTok'] !== _pintaTok) return;
           const _sigId  = (r && r.success && r.linea_id) ? String(r.linea_id) : '';
           const _sigLbl = _esc((r && r.servicio) || (r && r.componente_seq) || 'siguiente servicio');
-          if (!_sigId) {
+          var _pendientes = Number(r && r.pendientes || 0);
+          if (!_sigId && _pendientes === 0) {
             btnContainer.innerHTML =
               '<button class="btn-primary" style="margin-bottom:10px;background:var(--success);font-size:14px;padding:16px;"'
               + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarMandarCentral(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
               + '&#9989; Termin&eacute; &mdash; mandar a central</button>';
+            return;
+          }
+          if (!_sigId && _pendientes > 0) {
+            btnContainer.innerHTML =
+              '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--accent);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
+              + ' onclick="window._finishingSlot=' + _slotN + '; nativoPasarOtraStaff(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
+              + 'Ya termin&eacute; mi parte &mdash; enviar a central para la siguiente staff</button>'
+              + '<button style="margin-bottom:8px;width:100%;padding:14px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
+              + ' onclick="window._finishingSlot=' + _slotN + '; nativoTerminarYCancelar(\'' + _esc(_refNat) + '\',' + _idsMias + ',\'' + _sigLbl + '\')">'
+              + '&#9989; Termin&eacute; todo &mdash; la clienta se retira, mandar a central</button>';
             return;
           }
           btnContainer.innerHTML =
@@ -812,7 +831,7 @@
     }
 
     // SP- con promo → si hay servicios de OTRA área en el slot, ofrecer pasarlos a otra staff
-    if (_idEsperaSlot.startsWith('SP-')) {
+    if (_idEsperaSlot.startsWith('SP-') && !_esSlotNativoLineas(slot1 ? 1 : 2)) {
       const _slotSP = slot1 ? 1 : 2;
       const _myAreaSP = user?.area || 'cejas';
       const _svcsSP = (slotServices[_slotSP] || []).filter(s =>
@@ -1345,27 +1364,12 @@
     try {
       const user = window.currentUser;
       if (!user) return;
-      if ((slotServices[slot] || []).length > 0) {
-        // Los servicios ya están: no hay que reconstruirlos. PERO los botones sí
-        // hay que evaluarlos. En el camino de RECARGA nadie más llama a
-        // updateFinishButtons, así que el contenedor se quedaba con su contenido
-        // estático de index.html ("Finalizar servicio") y el modal nativo no
-        // aparecía nunca — aunque el guard fuera true y el backend reportara
-        // pendientes. Es idempotente: para legacy repinta la misma rama que
-        // habría pintado igual.
-        try { updateFinishButtons(slot); } catch (eUFB) {}
-        return;
-      }
+      if ((slotServices[slot] || []).length > 0) return; // ya hay servicios → no tocar
       const idEspera = slot === 1 ? (window._as1IdEspera || '') : (window._as2IdEspera || '');
       if (idEspera.startsWith('TM-')) return; // TM se restaura por otra ruta
       const clientName = document.getElementById('as' + slot + 'Name')?.textContent?.replace(' ⭐', '') || '';
       const clientKey = normalizeClientKey(clientName);
-      // NO se corta acá por activePromos: en un ticket nativo la promo queda
-      // registrada igual (loadClientAfterTake la guarda), y cortar dejaría el
-      // slot vacío en cada recarga. La decisión se toma abajo, ya con la
-      // atención en mano y sabiendo si es LINEAS. Para legacy el corte se
-      // mantiene idéntico.
-      const _hayPromoActiva = !!activePromos[clientKey];
+      if (activePromos[clientKey]) return; // promo se restaura por otra ruta
       const res = await apiGet('getAtenciones', { chica: user.name });
       if (!res.success || !res.atenciones || !res.atenciones.length) return;
       // Localizar la atención de este slot (por idEspera, por código, o por orden)
@@ -1376,23 +1380,6 @@
         if (code) a = res.atenciones.find(x => x.codigo === code);
       }
       if (!a) a = res.atenciones[slot === 1 ? 0 : 1];
-      if (!a) return;
-
-      // ── SP NATIVO · RECONSTRUCCIÓN EN RECARGA ────────────────────────────
-      // Flujo de RECARGA (F5 / show('activeService') con slotServices vacío).
-      // Distinto del flujo de toma, que ya se resuelve en loadClientAfterTake.
-      // Sin esto, router.js:190 ve el slot vacío y dispara el fallback legacy
-      // que inyecta la promo ENTERA ($40 · Cejas) y pisa el total.
-      //
-      // Se detecta por a.fuenteReal === 'LINEAS' (canónico, resuelto por el
-      // backend vía TicketsFuente — getAtenciones lo expone). NO se usa el
-      // prefijo del idEspera ni a.fuente. Tampoco se toca
-      // _asNFuenteCanonica: eso es otra fase, con su propio gate, porque
-      // poblarla reactiva applyPromoFromAddSvc para tickets legacy.
-      //
-      // Se reconstruye SOLO con mis componentes (staff = yo, no anulados) y
-      // conservando lineaId, que es la identidad que necesitan los botones
-      // de decisión post-parte.
       var _fcRest = String(a.fuenteReal || '').toUpperCase();
       if (_fcRest === 'LINEAS' && Array.isArray(a.serviciosDetalle) && a.serviciosDetalle.length) {
         var _yoRest = String(user.name || '').trim().toLowerCase();
@@ -1400,7 +1387,7 @@
           return String(sd.staff || '').trim().toLowerCase() === _yoRest
               && String(sd.estado || '') !== 'anulado';
         });
-        if (!_miasRest.length) return;   // nada mío activo: no inventar filas
+        if (!_miasRest.length) return;
         slotServices[slot] = _miasRest.map(function (sd) {
           return { name: sd.servicio || sd.nombre || sd.name || '',
                    price: Number(sd.monto || sd.precio || sd.price || 0),
@@ -1408,6 +1395,9 @@
                    lineaId: String(sd.id || sd.lineaId || ''),
                    estado: String(sd.estado || '') };
         });
+        window['_as' + slot + 'Aten'] = a;
+        window['_as' + slot + 'EsNativo'] = true;
+        window['_as' + slot + 'IdEspera'] = String(a.idEspera || idEspera || '');
         renderServicesForSlot(slot);
         var _totRest = slotServices[slot].reduce(function (x, v) { return x + Number(v.price || 0); }, 0);
         var _tR = document.getElementById('as' + slot + 'Total');    if (_tR) _tR.textContent = '$' + _totRest;
@@ -1415,10 +1405,7 @@
         updateFinishButtons(slot);
         return;
       }
-
-      // Legacy: comportamiento original intacto — promo por otra ruta.
-      if (_hayPromoActiva) return;
-      if (a.promoNombre) return;
+      if (!a || a.promoNombre) return; // promo → otra ruta
       if (a.serviciosDetalle && a.serviciosDetalle.length > 0) {
         slotServices[slot] = a.serviciosDetalle.map(sd => ({
           name: sd.servicio || sd.nombre || sd.name || '',
@@ -1585,19 +1572,12 @@
           const a1 = aten[0];
           window._as1Client = a1.codigo;
           window._as1IdEspera = a1.idEspera || ''; // ID del ticket LE-XXXX
-          // G2 · la atención completa se conserva por slot: updateFinishButtons
-          // necesita fuente y serviciosDetalle (con linea_id) para decidir el
-          // modal nativo. Antes solo se guardaba el idEspera y esa info se perdía.
+          // R.5 · la atención completa se conserva por slot: el bloque de
+          // decisión post-parte necesita fuente y serviciosDetalle (con
+          // linea_id). Antes solo se guardaba idEspera y esa info se perdía.
           window._as1Aten = a1;
-          // MONÓTONO · una vez que el ticket se resolvió como nativo, no se
-          // degrada. getAtenciones puede devolver fuenteReal='DESCONOCIDA' en
-          // una relectura si el caché de TicketsFuente no resuelve en ese
-          // request — y mi normalizador, por contrato D7.1, trata DESCONOCIDA
-          // como no-nativo (fail-closed). Eso invertía el guard después de que
-          // la rama nativa ya había pintado, y un updateFinishButtons tardío
-          // caía a la rama SP- legacy (:780, "enviar a cobro con Mikaela").
-          // Se sube a true, nunca se baja: la fuente de un ticket es inmutable.
-          // El reset a false solo ocurre al cambiar de ticket (ver limpiezas).
+          // MONÓTONO · una vez resuelto como nativo no se degrada: una
+          // relectura con fuenteReal='DESCONOCIDA' no invierte el criterio.
           window._as1EsNativo = (window._as1EsNativo === true) || _fuenteEsNativa(a1);
           const initials1 = (a1.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av = document.getElementById('as1Avatar');
@@ -1610,18 +1590,10 @@
           _setNotaRecepcion(1, a1.observaciones);
 
           // Restaurar servicios de la 1ª clienta desde el ticket
-          // ── SP NATIVO · SOLO MIS COMPONENTES ─────────────────────────────
-          // La rama de promo de abajo mete la promo ENTERA como un servicio
-          // ("Combo 18 combo full · $40 · Cejas"), que es correcto en legacy
-          // pero falso acá: la staff aceptó K de N componentes y el resto es de
-          // otra. Por eso a Keyla le aparecía su bikini $25 MÁS la promo $40
-          // repetida encima, y "Total actual" daba $40 en vez de $25.
-          // En LineasNativo slotServices se arma con las líneas que son SUYAS
-          // (staff = ella y no anuladas). Mikaela y la hoja ya estaban bien:
-          // esto era solo la pantalla de la staff.
-          var _nativo1 = _fuenteEsNativa(a1)
-                      && Array.isArray(a1.serviciosDetalle) && a1.serviciosDetalle.length > 0;
+          var _nativo1 = _fuenteEsNativa(a1) && Array.isArray(a1.serviciosDetalle) && a1.serviciosDetalle.length > 0;
           if (_nativo1) {
+            window._as1Aten = a1;
+            window._as1EsNativo = true;
             var _yo1 = String((window.currentUser && window.currentUser.name) || '').toLowerCase();
             var _mias1 = a1.serviciosDetalle.filter(function (sd) {
               return String(sd.staff || '').trim().toLowerCase() === _yo1
@@ -1629,8 +1601,8 @@
             });
             if (_mias1.length) {
               slotServices[1] = _mias1.map(function (sd) {
-                return { name: sd.servicio || sd.nombre || sd.name,
-                         price: Number(sd.monto || sd.precio || sd.price || 0),
+                return { name: sd.servicio || sd.name,
+                         price: Number(sd.monto || sd.price || 0),
                          area: sd.area || a1.area || '', lineaId: String(sd.id || ''),
                          estado: String(sd.estado || '') };
               });
@@ -1674,19 +1646,23 @@
               const a2 = aten[1];
               window._as2Client = a2.codigo;
               window._as2IdEspera = a2.idEspera || ''; // ID del ticket de la 2ª clienta
-              window._as2Aten = a2;   // G2 · ver nota en slot 1
-              // MONÓTONO — ver nota en slot 1.
-              window._as2EsNativo = (window._as2EsNativo === true) || _fuenteEsNativa(a2);
+          // R.5 · la atención completa se conserva por slot: el bloque de
+          // decisión post-parte necesita fuente y serviciosDetalle (con
+          // linea_id). Antes solo se guardaba idEspera y esa info se perdía.
+          window._as2Aten = a2;
+          // MONÓTONO · una vez resuelto como nativo no se degrada: una
+          // relectura con fuenteReal='DESCONOCIDA' no invierte el criterio.
+          window._as2EsNativo = (window._as2EsNativo === true) || _fuenteEsNativa(a2);
               activeClients[user.name].push({ name: a2.nombre, code: a2.codigo, service: a2.servicio });
               const initials2 = a2.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
               const _as2av = document.getElementById('as2Avatar'); if (_as2av) _as2av.textContent = initials2;
               pintarNombre('as2Name', a2.nombre, a2.codigo, a2.esTop);
               const _as2cd = document.getElementById('as2Code'); if (_as2cd) _as2cd.textContent = a2.codigo + (a2.horaLlegada ? ' · Llegó ' + a2.horaLlegada : '');
               // Cargar servicios de la 2ª clienta si vienen del ticket
-              // SP NATIVO · solo mis componentes (ver nota en el slot 1)
-              var _nativo2 = _fuenteEsNativa(a2)
-                          && Array.isArray(a2.serviciosDetalle) && a2.serviciosDetalle.length > 0;
+              var _nativo2 = _fuenteEsNativa(a2) && Array.isArray(a2.serviciosDetalle) && a2.serviciosDetalle.length > 0;
               if (_nativo2) {
+                window._as2Aten = a2;
+                window._as2EsNativo = true;
                 var _yo2 = String((window.currentUser && window.currentUser.name) || '').toLowerCase();
                 var _mias2 = a2.serviciosDetalle.filter(function (sd) {
                   return String(sd.staff || '').trim().toLowerCase() === _yo2
@@ -1715,8 +1691,6 @@
               // No hay 2ª clienta → limpiar slot 2 para no arrastrar datos de una sesión anterior
               window._as2Client = '';
               window._as2IdEspera = '';
-              window._as2Aten = null;
-              window._as2EsNativo = false;
               slotServices[2] = [];
               const _as2nm = document.getElementById('as2Name'); if (_as2nm) _as2nm.textContent = '';
               const _as2cd2 = document.getElementById('as2Code'); if (_as2cd2) _as2cd2.textContent = '';
@@ -2821,6 +2795,44 @@
   // B. tomadaPor NUNCA amplía ni sobreescribe una asignación explícita.
   // C. asignadaA vacío      → tomadaPor como fallback legacy.
   // D. ambos vacíos         → de nadie (modelo centralizado).
+  // ── R.5 · DETECTOR DE FUENTE NATIVA (literal DEV) ───────────────────────────
+  // Copiado literalmente del DEV aprobado. Es la ÚNICA verdad de "este slot es
+  // un ticket nativo LINEAS", y decide por fuente real — nunca por prefijo SN-.
+  function _fuenteEsNativa(a) {
+    if (!a) return false;
+    var fr = String(a.fuenteReal || '').toUpperCase();
+    if (fr === 'LINEAS') return true;
+    if (fr === 'LEGACY' || fr === 'DESCONOCIDA') return false;  // canónico y explícito: no adivinar
+    return String(a.fuente || '') === 'LineasNativo';
+  }
+
+  // ── ¿el slot corresponde a un ticket nativo LINEAS? ──────────────────────────
+  // Se consulta desde varios puntos y NO puede depender de una sola fuente: el
+  // slot se puebla por dos caminos distintos (loadStaffHome y el de TOMAR), y si
+  // la detección falla el sistema cae al flujo legacy — que fue exactamente lo
+  // que hacía reaparecer la segunda confirmación con la promo completa sumada
+  // encima ($25 seleccionados + $40 de la promo = $65).
+  // Se mira, en orden: la atención persistida del slot, el flag sellado al
+  // tomar, y el objeto de toma todavía en memoria.
+  function _esSlotNativoLineas(slot) {
+    try {
+      const _a = (slot === 1) ? window._as1Aten : window._as2Aten;
+      if (_fuenteEsNativa(_a)) return true;
+      const _f = (slot === 1) ? window._as1EsNativo : window._as2EsNativo;
+      if (_f === true) return true;
+      if (_fuenteEsNativa(window._takingData)) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  // Se expone para nexserv-main-4.js, que necesita la MISMA verdad de "este slot
+  // es nativo" y vive en otro archivo. Se expone la funcion en vez de duplicar
+  // su logica: es monotona (una vez true no vuelve a false salvo cambio de
+  // ticket) y esa monotonia es justamente lo que evita que una relectura tardia
+  // de getAtenciones con fuente DESCONOCIDA invierta el criterio despues de que
+  // la rama nativa ya pinto.
+  window._esSlotNativoLineas = _esSlotNativoLineas;
+
   function _staffQueueEsMia(w, user) {
     if (!w || !user) return false;
     const yo = _nsNorm(user.name);
@@ -2866,7 +2878,17 @@
       // /TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME
       return st.data;
     }
-    if (st.inFlight) return st.inFlight;   // una sola lectura real por ráfaga
+    if (st.inFlight) {
+      if (!opts.forzar) return st.inFlight;
+      if (st.refrescoPendiente) return st.refrescoPendiente;
+      st.refrescoPendiente = st.inFlight
+        .catch(function () { return st.data; })
+        .then(function () {
+          st.refrescoPendiente = null;
+          return refreshStaffQueue(origen + '+post', { forzar: true });
+        });
+      return st.refrescoPendiente;
+    }
 
     st.inFlight = (async () => {
       const _t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -3145,6 +3167,7 @@
       return;
     }
 
+
     // ── PLAN A · A6 — TICKET NATIVO LINEAS: componentes reales ──────────────
     // Para fuente 'LineasNativo' los ítems del modal son las LÍNEAS reales del
     // ticket, con su linea_id estable. Antes se caía siempre al splitter de
@@ -3216,7 +3239,6 @@
       document.getElementById('takeModal').classList.add('active');
       return;
     }
-
     // ── DEPILACIÓN CORPORAL: múltiples ítems ──
     const esDepi = w.area === 'depilacion' || servicioStr0.toLowerCase().includes('depi') || servicioStr0.toLowerCase().includes('bikini') || servicioStr0.toLowerCase().includes('pierna') || servicioStr0.toLowerCase().includes('axila');
 
@@ -3293,7 +3315,6 @@
 
   function toggleDepiItem(idx, checked) {
     if (window._depiItems && window._depiItems[idx] !== undefined) {
-      if (window._depiItems[idx].bloqueado) return;   // otra área: no seleccionable
       window._depiItems[idx].checked = checked;
       renderDepiItems();
     }
@@ -3311,9 +3332,7 @@
     // La staff hace todo el servicio pendiente — flujo normal
     window._depiItems = (window._depiItems || []).map(i => ({
       ...i,
-      // ni los ya completados ni los de otra área (bloqueado): "hago todo" es
-      // "todo LO MÍO", no todo el ticket.
-      checked: (i.readonly || i.completado || i.bloqueado) ? false : true
+      checked: i.readonly || i.completado ? false : true  // no marcar los ya completados
     }));
     await confirmTake();
   }
@@ -3553,15 +3572,17 @@
         if (slot === 0) {
           window._as1Client = a.codigo;
           window._as1IdEspera = a.idEspera || window._takingId || ''; // ID ticket LE-XXXX
-          // G2 FIX · este es el camino de TOMAR (no el de loadStaffHome), y aquí
-          // también hay que persistir la atención: updateFinishButtons y
-          // showConfirmServiceModal leen _asNAten para saber si el ticket es
-          // LineasNativo. Sin esto quedaba undefined justo después de tomar, así
-          // que caía al flujo legacy: salían los botones viejos y reaparecía la
-          // segunda confirmación con la promo completa sumada encima.
+          // R.5 · este es el camino de TOMAR (no loadStaffHome): también hay
+          // que persistir la atención, o el bloque nativo queda undefined
+          // justo después de tomar y se cae al flujo legacy.
           window._as1Aten = a || window._takingData || null;
-          // MONÓTONO — ver nota en loadStaffHome slot 1.
-          window._as1EsNativo = (window._as1EsNativo === true) || _fuenteEsNativa(window._as1Aten);
+          // 2A · comprobación DEV literal: fuenteReal (getAtenciones) O
+          // fuente='LineasNativo' (tarjeta, que viaja en _takingData). Mirar solo
+          // _as1Aten hacía que esta rama nunca corriera cuando getAtenciones
+          // devuelve el objeto sin fuenteReal.
+          window._as1EsNativo = (window._as1EsNativo === true)
+            || _fuenteEsNativa(window._as1Aten)
+            || _fuenteEsNativa(window._takingData);
           const initials = (a.nombre || '').split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as1av0 = document.getElementById('as1Avatar');
           if (_as1av0) { _as1av0.textContent = initials; _as1av0.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -3715,7 +3736,7 @@
             try { updateFinishButtons(); } catch (eF1) {}
           }
           // Si viene con promo asignada, guardarla pero permitir cambiarla
-          if (window._availablePromo && !_esNat1) {   // LineasNativo NO entra: su slotServices ya se armó arriba
+          if (window._availablePromo && !_esNat1) {
             const promoBasic = window._availablePromo;
             
             // Buscar la promo completa en PROMOS
@@ -3986,9 +4007,17 @@
         } else {
           window._as2Client = a.codigo;
           window._as2IdEspera = a.idEspera || window._takingId || ''; // ID del ticket de la 2ª clienta
-          window._as2Aten = a || window._takingData || null;   // G2 FIX · ver nota en slot 1
-          // MONÓTONO — ver nota en slot 1.
-          window._as2EsNativo = (window._as2EsNativo === true) || _fuenteEsNativa(window._as2Aten);
+          // R.5 · este es el camino de TOMAR (no loadStaffHome): también hay
+          // que persistir la atención, o el bloque nativo queda undefined
+          // justo después de tomar y se cae al flujo legacy.
+          window._as2Aten = a || window._takingData || null;
+          // 2A · comprobación DEV literal: fuenteReal (getAtenciones) O
+          // fuente='LineasNativo' (tarjeta, que viaja en _takingData). Mirar solo
+          // _as2Aten hacía que esta rama nunca corriera cuando getAtenciones
+          // devuelve el objeto sin fuenteReal.
+          window._as2EsNativo = (window._as2EsNativo === true)
+            || _fuenteEsNativa(window._as2Aten)
+            || _fuenteEsNativa(window._takingData);
           const initials2b = a.nombre.split(' ').map(n=>n[0]).join('').slice(0,2);
           const _as2avb = document.getElementById('as2Avatar');
           if (_as2avb) { _as2avb.textContent = initials2b; _as2avb.className = 'client-avatar' + (a.esTop ? ' is-top' : ''); }
@@ -4064,7 +4093,6 @@
             if (activePromos[clientKeyClean2]) delete activePromos[clientKeyClean2];
           }
           
-          // Si viene con promo asignada, guardarla pero permitir cambiarla
           // ── SP NATIVO · slotServices = SOLO MIS COMPONENTES (SLOT 2) ─────
           // Espejo exacto del bloque del slot 1. El área de cejas atiende dos
           // clientas a la vez, así que el segundo puesto necesita el mismo
@@ -4100,7 +4128,7 @@
             }
             try { updateFinishButtons(2); } catch (eF2) {}
           }
-          if (window._availablePromo && !_esNat2) {   // LineasNativo NO entra: su slotServices ya se armó arriba
+          if (window._availablePromo && !_esNat2) {
             const promoBasic = window._availablePromo;
             
             // Buscar la promo completa en PROMOS
@@ -4694,6 +4722,13 @@
         payload.precioRegular  = promoData.precioRegular;
       }
       if (idEspera) payload.idEspera = idEspera;
+      // FIX-SYNC-LINEAS-GUARD — la normalización local (dedup, _sinExtrasAut,
+      // total, render) ya ocurrió arriba y se conserva para todos los slots.
+      // Lo que NO debe ocurrir en un slot nativo es la escritura legacy en
+      // ListaEspera: LINEAS es la fuente operativa y volver a leer ese espejo
+      // pisaría estado/monto/servicio reales. Detector: el mismo que ya usa
+      // todo el frontend nativo, nunca uno nuevo.
+      if (typeof _esSlotNativoLineas === 'function' && _esSlotNativoLineas(slot)) return;
       await apiPost('updateServiciosAtencion', payload);
     } catch(e) { console.error('Error sync servicios:', e); }
   }
@@ -5078,42 +5113,6 @@
   async function toggleModoSeguridad(modo) {
     try { await apiPost('setModoSeguridad', { modo: modo }); } catch(e){}
     loadSesiones();
-  }
-
-  // ── NORMALIZADOR DE FUENTE ───────────────────────────────────────────────────
-  // El backend usa DOS nombres para la misma verdad, y hay que aceptar los dos:
-  //   · getAtenciones  -> fuenteReal: 'LINEAS' | 'LEGACY' | 'DESCONOCIDA'
-  //                       (a.fuente ahí es el TIPO HISTÓRICO, no la arquitectura;
-  //                        AppsScript.js:5115 lo marca como "NO TOCAR")
-  //   · _cardItem      -> fuente: 'LineasNativo'   (lista de espera / tarjeta)
-  // Mirar solo una de las dos deja fuera la mitad de los caminos: el objeto que
-  // llega tras TOMAR viene de getAtenciones y NO trae 'LineasNativo'.
-  // fuenteReal manda; 'LineasNativo' es el respaldo para objetos de tarjeta.
-  function _fuenteEsNativa(a) {
-    if (!a) return false;
-    var fr = String(a.fuenteReal || '').toUpperCase();
-    if (fr === 'LINEAS') return true;
-    if (fr === 'LEGACY' || fr === 'DESCONOCIDA') return false;  // canónico y explícito: no adivinar
-    return String(a.fuente || '') === 'LineasNativo';
-  }
-
-  // ── ¿el slot corresponde a un ticket nativo LINEAS? ──────────────────────────
-  // Se consulta desde varios puntos y NO puede depender de una sola fuente: el
-  // slot se puebla por dos caminos distintos (loadStaffHome y el de TOMAR), y si
-  // la detección falla el sistema cae al flujo legacy — que fue exactamente lo
-  // que hacía reaparecer la segunda confirmación con la promo completa sumada
-  // encima ($25 seleccionados + $40 de la promo = $65).
-  // Se mira, en orden: la atención persistida del slot, el flag sellado al
-  // tomar, y el objeto de toma todavía en memoria.
-  function _esSlotNativoLineas(slot) {
-    try {
-      const _a = (slot === 1) ? window._as1Aten : window._as2Aten;
-      if (_fuenteEsNativa(_a)) return true;
-      const _f = (slot === 1) ? window._as1EsNativo : window._as2EsNativo;
-      if (_f === true) return true;
-      if (_fuenteEsNativa(window._takingData)) return true;
-    } catch (e) {}
-    return false;
   }
 
   function showConfirmServiceModal(slot) {
@@ -5730,3 +5729,4 @@ window._lineasLineasAAreasModal = _lineasLineasAAreasModal;
 window.cobrarPromoCompleta = cobrarPromoCompleta;
 window.finishAndContinueSameStaff = finishAndContinueSameStaff;
 window.compartirSiguienteServicio = compartirSiguienteServicio;
+
