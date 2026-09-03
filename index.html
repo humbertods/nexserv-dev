@@ -3,11 +3,15 @@
 <head>
   <!-- Service Worker registration → js/app.js -->
   <script>
-    // Limpiar cache del Service Worker para forzar archivos frescos
+    // Limpiar cache del Service Worker para forzar archivos frescos.
+    // ESTRICTO: solo caches propias de DEV (prefijo "nexserv-dev-"). Nunca
+    // tocar "nexserv-prod-*", ningún otro "nexserv-*", ni ninguna cache
+    // desconocida — caches.keys()/delete() operan a nivel de origen
+    // completo (humbertods.github.io), no de ruta.
     if ('serviceWorker' in navigator && 'caches' in window) {
       caches.keys().then(function(names) {
         names.forEach(function(name) {
-          if (name.indexOf('firebase') === -1) { // mantener FCM
+          if (name.startsWith('nexserv-dev-')) {
             caches.delete(name);
           }
         });
@@ -43,7 +47,7 @@
 <!-- ── MANDAMIENTOS DEL SISTEMA ── cargado antes del body para que sus funciones estén disponibles globalmente -->
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-messaging-compat.js"></script>
-<script src="nexserv-mandamientos.js?v=20260706a"></script>
+<script src="nexserv-mandamientos.js?v=20260815a"></script>
 
 </head>
 <body>
@@ -54,23 +58,32 @@
   <div class="user-menu-overlay" id="userMenuOverlay" onclick="closeUserMenu()"></div>
   <div class="user-menu" id="userMenu">
     <div id="userMenuName" style="padding: 10px 14px 6px; font-size: 11px; font-weight: 700; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.05em;"></div>
+    <button class="user-menu-item" id="menuPagosVerificacionBtn" style="display:none;" onclick="closeUserMenu(); show('ownerPagosVerificacion');">
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.9-3.4 8.5-8 10-4.6-1.5-8-5.1-8-10V6l8-3Z"/><path d="M9 12.5 11.5 15 15 9.5"/></svg> Verificación de pagos
+    </button>
     <button class="user-menu-item" id="menuCajaBtn" style="display:none;" onclick="closeUserMenu(); show('ownerCaja');">
-      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2 7a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v1H2V7Zm0 3h20v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3v-8Zm13 3a1.5 1.5 0 0 0 0 3h3a1.5 1.5 0 0 0 0-3h-3Z"/></svg> Caja chica
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M16 10h5v4h-5a2 2 0 0 1 0-4Z"/><path d="M3 10h13"/></svg> Caja chica
     </button>
     <button class="user-menu-item" id="menuCierreMesBtn" style="display:none;" onclick="closeUserMenu(); show('ownerCierreMes');">
-      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1V3a1 1 0 0 1 1-1Zm12 7H5v10h14V9Zm-9 2v2H8v-2h2Zm4 0v2h-2v-2h2Zm4 0v2h-2v-2h2Z"/></svg> Cierre mes
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg> Cierre mes
     </button>
     <button class="user-menu-item" id="menuInformeServiciosBtn" style="display:none;" onclick="closeUserMenu(); show('ownerInformeServicios'); cargarInformeServicios();">
-      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M4 3a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H4Zm2 13h2v3H6v-3Zm5-6h2v9h-2V10Zm5-4h2v13h-2V6Z"/></svg> Informe de servicios
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M6 20v-6M12 20V6M18 20v-9"/></svg> Informe de servicios
     </button>
     <button class="user-menu-item" id="menuSeguridadBtn" style="display:none;" onclick="closeUserMenu(); show('ownerSesiones');">
-      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3Zm0 6a2.5 2.5 0 0 1 1 4.78V15a1 1 0 1 1-2 0v-2.22A2.5 2.5 0 0 1 12 8Z"/></svg> Seguridad app
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg> Seguridad app
     </button>
     <button class="user-menu-item" id="menuPushTestBtn" style="display:none;" onclick="closeUserMenu(); probarNotificaciones();">
-      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M12 2a6 6 0 0 0-6 6c0 3.5-1.5 5-2 6h16c-.5-1-2-2.5-2-6a6 6 0 0 0-6-6Zm0 20a3 3 0 0 0 3-3H9a3 3 0 0 0 3 3Z"/></svg> Probar notificaciones
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg> Probar notificaciones
     </button>
     <button class="user-menu-item" id="menuHistorialBtn" style="display:none;" onclick="closeUserMenu(); abrirHistorialServicios();">
-      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 3a9 9 0 1 0 8.94 10H19.9A7 7 0 1 1 13 5v4l4-4-4-4v2Zm-1 5v5l4 2 .75-1.23L13.5 12.2V8H12Z"/></svg> Historial de servicios
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg> Historial de servicios
+    </button>
+    <!-- Recordatorios (seguimientos). Solo admin/owner; la visibilidad la aplica
+         openUserMenu() en nexserv-main-1.js. Ocultar el botón es UX: el control
+         real es recGuardCentral_ en el backend, que valida la sesión firmada. -->
+    <button class="user-menu-item" id="menuRecordatoriosBtn" style="display:none;" onclick="closeUserMenu(); show('recordatoriosCentral');">
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg> Recordatorios
     </button>
     <button class="user-menu-item" id="menuSolucionesBtn" style="display:none;" onclick="closeUserMenu(); openSoluciones();">
       <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M21.71 18.29 13.4 9.98a5.5 5.5 0 0 0-7.04-7.05l3.2 3.2a1.5 1.5 0 0 1-2.12 2.12l-3.2-3.2A5.5 5.5 0 0 0 11.3 12l8.3 8.3a1 1 0 0 0 1.42 0l.69-.69a1 1 0 0 0 0-1.32Z"/></svg> Soluciones
@@ -86,6 +99,12 @@
     </button>
     <button class="user-menu-item" id="menuSiraAdminBtn" style="display:none;" onclick="closeUserMenu(); openMkInventario();">
       <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6.5 2A4.5 4.5 0 0 0 2 6.5V18a4 4 0 0 0 4 4h12a4 4 0 0 0 4-4V6.5A4.5 4.5 0 0 0 17.5 2h-11ZM9 6.5a3 3 0 0 0 6 0 1 1 0 1 1 2 0 5 5 0 0 1-10 0 1 1 0 0 1 2 0Z"/></svg> Inventario de productos
+    </button>
+    <!-- Verificación de pagos para staff autorizada (Rosa · ro2026). El botón del
+         Owner es el de arriba; este va antes de "Cerrar sesión" en su menú.
+         Visibilidad por identidad (puedeVerificarPagos), no por CSS. -->
+    <button class="user-menu-item" id="menuPagosVerifStaffBtn" style="display:none;" onclick="closeUserMenu(); show('ownerPagosVerificacion');">
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.9-3.4 8.5-8 10-4.6-1.5-8-5.1-8-10V6l8-3Z"/><path d="M9 12.5 11.5 15 15 9.5"/></svg> Verificación de pagos
     </button>
     <button class="user-menu-item" onclick="closeUserMenu(); logout();">
       <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13 3a2 2 0 0 1 2 2v1h2a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2V5a2 2 0 0 1 2-2h2Zm0 2h-2v1h2V5Zm-4 4H7v11h10V9h-2v7a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2V9Zm2 0v7h2V9h-2Zm3 3.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg> Cerrar sesión
@@ -318,6 +337,18 @@
     </div>
     <!-- ===== /CAJA CHICA ===== -->
 
+    <!-- ===== ENTRADA A RECORDATORIOS (seguimientos) ===== -->
+    <div onclick="show('recordatoriosCentral')"
+         style="display:flex;align-items:center;gap:10px;background:var(--bg-card);border:1.5px solid var(--line);border-radius:14px;padding:13px 15px;margin-bottom:18px;cursor:pointer;">
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:800;font-size:14px;letter-spacing:-0.01em;">Recordatorios</div>
+        <div style="font-size:11px;color:var(--ink-soft);margin-top:2px;">Clientas a las que toca dar seguimiento</div>
+      </div>
+      <span style="font-size:14px;color:var(--ink-faint);">›</span>
+    </div>
+    <!-- ===== /RECORDATORIOS ===== -->
+
     <!-- AUTORIZACIONES PENDIENTES -->
     <div id="authorizationsSection" style="display: none;">
       <div class="section-title" style="background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%); color: white; padding: 10px 16px; border-radius: 12px; margin-bottom: 12px;">
@@ -528,12 +559,17 @@
           <button onclick="selectPago('Pago mixto', this)" class="pago-btn" style="padding: 14px; border-radius: var(--radius-pill); border: 2px solid var(--line); background: var(--bg-card); color: var(--ink); font-family: inherit; font-size: 13px; font-weight: 700; cursor: pointer;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="vertical-align:-2px;margin-right:5px;"><path d="M16 3h5v5l-1.5-1.5-4.5 4.5-3-3-6 6-1.5-1.5 7.5-7.5 3 3 3-3L16 3zM4.5 16.5 3 18v3h3l8.5-8.5-3-3-7 7z"/></svg>Pago mixto</button>
         </div>
 
+        <!-- Pre-confirmación de TRANSFERENCIA simple. Banco y código son
+             obligatorios ANTES de confirmar el cobro. type="text" a propósito:
+             el código puede traer ceros a la izquierda o guiones (001245, ABC-9821). -->
+        <div id="transferPanel" style="display:none;background:var(--bg);border:1.5px solid var(--accent);border-radius:12px;padding:10px 12px;margin-bottom:16px;"><div style="font-size:10px;font-weight:800;color:var(--accent-deep);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Pre-confirmación de transferencia</div><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Responsable *</div><input type="text" id="transferResponsable" placeholder="Ej: Mikaela · Sra. Rosa" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Banco *</div><input type="text" id="transferBanco" placeholder="Ej: Pichincha" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">No. de confirmación *</div><input type="text" id="transferCodigo" placeholder="Ej: 548921 · ABC-9821" autocomplete="off" inputmode="text" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;"></div>
+
         <!-- Panel desglose pago mixto -->
         <div id="mixtoPanel" style="display:none;background:var(--bg);border:1.5px solid var(--line);border-radius:16px;padding:14px;margin-bottom:16px;">
           <div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:10px;text-transform:uppercase;letter-spacing:.05em;">Desglosar pago mixto</div>
           <!-- Fila 1 -->
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;align-items:center;">
-            <select id="mixtoMetodo1" style="padding:11px 10px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:13px;font-weight:700;background:var(--bg-card);color:var(--ink);appearance:none;-webkit-appearance:none;cursor:pointer;">
+            <select id="mixtoMetodo1" onchange="onMixtoMetodoChange()" style="padding:11px 10px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:13px;font-weight:700;background:var(--bg-card);color:var(--ink);appearance:none;-webkit-appearance:none;cursor:pointer;">
               <option value="Efectivo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="vertical-align:-2px;margin-right:5px;"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>Efectivo</option>
               <option value="Transferencia">Transferencia</option>
               <option value="Tarjeta"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="vertical-align:-2px;margin-right:5px;"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Zm0 14H4V10h16v8Zm0-10H4V6h16v2ZM6 14h4v2H6Z"/></svg>Tarjeta</option>
@@ -542,9 +578,10 @@
               oninput="onMixtoInput()"
               style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:15px;font-weight:700;background:var(--bg-card);box-sizing:border-box;width:100%;">
           </div>
+          <div id="mixtoTransfer1" style="display:none;background:var(--bg);border:1.5px solid var(--accent);border-radius:12px;padding:10px 12px;margin-bottom:8px;"><div style="font-size:10px;font-weight:800;color:var(--accent-deep);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Pre-confirmación de transferencia</div><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Responsable *</div><input type="text" id="mixtoResponsable1" placeholder="Ej: Mikaela · Sra. Rosa" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Banco *</div><input type="text" id="mixtoBanco1" placeholder="Ej: Pichincha" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">No. de confirmación *</div><input type="text" id="mixtoCodigo1" placeholder="Ej: 548921 · ABC-9821" autocomplete="off" inputmode="text" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;"></div>
           <!-- Fila 2 -->
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;align-items:center;">
-            <select id="mixtoMetodo2" style="padding:11px 10px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:13px;font-weight:700;background:var(--bg-card);color:var(--ink);appearance:none;-webkit-appearance:none;cursor:pointer;">
+            <select id="mixtoMetodo2" onchange="onMixtoMetodoChange()" style="padding:11px 10px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:13px;font-weight:700;background:var(--bg-card);color:var(--ink);appearance:none;-webkit-appearance:none;cursor:pointer;">
               <option value="Transferencia">Transferencia</option>
               <option value="Efectivo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="vertical-align:-2px;margin-right:5px;"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>Efectivo</option>
               <option value="Tarjeta"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="vertical-align:-2px;margin-right:5px;"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Zm0 14H4V10h16v8Zm0-10H4V6h16v2ZM6 14h4v2H6Z"/></svg>Tarjeta</option>
@@ -553,9 +590,10 @@
               oninput="onMixtoInput()"
               style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:15px;font-weight:700;background:var(--bg-card);box-sizing:border-box;width:100%;">
           </div>
+          <div id="mixtoTransfer2" style="display:none;background:var(--bg);border:1.5px solid var(--accent);border-radius:12px;padding:10px 12px;margin-bottom:8px;"><div style="font-size:10px;font-weight:800;color:var(--accent-deep);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Pre-confirmación de transferencia</div><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Responsable *</div><input type="text" id="mixtoResponsable2" placeholder="Ej: Mikaela · Sra. Rosa" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Banco *</div><input type="text" id="mixtoBanco2" placeholder="Ej: Pichincha" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">No. de confirmación *</div><input type="text" id="mixtoCodigo2" placeholder="Ej: 548921 · ABC-9821" autocomplete="off" inputmode="text" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;"></div>
           <!-- Fila 3 -->
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;align-items:center;">
-            <select id="mixtoMetodo3" style="padding:11px 10px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:13px;font-weight:700;background:var(--bg-card);color:var(--ink);appearance:none;-webkit-appearance:none;cursor:pointer;">
+            <select id="mixtoMetodo3" onchange="onMixtoMetodoChange()" style="padding:11px 10px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:13px;font-weight:700;background:var(--bg-card);color:var(--ink);appearance:none;-webkit-appearance:none;cursor:pointer;">
               <option value="Tarjeta"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="vertical-align:-2px;margin-right:5px;"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2Zm0 14H4V10h16v8Zm0-10H4V6h16v2ZM6 14h4v2H6Z"/></svg>Tarjeta</option>
               <option value="Efectivo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="vertical-align:-2px;margin-right:5px;"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>Efectivo</option>
               <option value="Transferencia">Transferencia</option>
@@ -564,6 +602,7 @@
               oninput="onMixtoInput()"
               style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:15px;font-weight:700;background:var(--bg-card);box-sizing:border-box;width:100%;">
           </div>
+          <div id="mixtoTransfer3" style="display:none;background:var(--bg);border:1.5px solid var(--accent);border-radius:12px;padding:10px 12px;margin-bottom:8px;"><div style="font-size:10px;font-weight:800;color:var(--accent-deep);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Pre-confirmación de transferencia</div><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Responsable *</div><input type="text" id="mixtoResponsable3" placeholder="Ej: Mikaela · Sra. Rosa" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Banco *</div><input type="text" id="mixtoBanco3" placeholder="Ej: Pichincha" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">No. de confirmación *</div><input type="text" id="mixtoCodigo3" placeholder="Ej: 548921 · ABC-9821" autocomplete="off" inputmode="text" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;"></div>
           <div id="mixtoSuma" style="font-size:12px;font-weight:700;text-align:center;color:var(--ink-soft);"></div>
         </div>
 
@@ -917,6 +956,7 @@
               <option>Volumen ruso</option>
               <option>Mega volumen ruso Kylie</option>
               <option>Volumen egipcio</option>
+              <option>Volumen griego</option>
               <option>Volumen tecnológico</option>
               <option>Volumen hawaiano</option>
               <option>Mega volumen ruso</option>
@@ -1098,13 +1138,18 @@
         <span id="vdTotal" style="font-size:18px;font-weight:800;color:var(--ink);">$0</span>
       </div>
       <div style="margin:12px 0;">
-        <select id="vdFormaPago" style="width:100%;padding:10px 14px;border:1.5px solid var(--line);border-radius:10px;font-family:inherit;font-size:14px;background:var(--bg);color:var(--ink);appearance:none;-webkit-appearance:none;">
+        <select id="vdFormaPago" onchange="vdOnFormaPagoChange()" style="width:100%;padding:10px 14px;border:1.5px solid var(--line);border-radius:10px;font-family:inherit;font-size:14px;background:var(--bg);color:var(--ink);appearance:none;-webkit-appearance:none;">
           <option value="">Forma de pago ▾</option>
           <option value="Efectivo">Efectivo</option>
           <option value="Transferencia">Transferencia</option>
           <option value="Tarjeta">Tarjeta</option>
         </select>
       </div>
+      <!-- Pre-confirmación de transferencia — venta directa de producto.
+           Mismo contrato que el cobro de servicios: Responsable / Banco /
+           No. de confirmación, los tres obligatorios. Solo visible cuando la
+           forma de pago es Transferencia. -->
+      <div id="vdTransferPanel" style="display:none;background:var(--bg);border:1.5px solid var(--accent);border-radius:12px;padding:10px 12px;margin-bottom:12px;"><div style="font-size:10px;font-weight:800;color:var(--accent-deep);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Pre-confirmación de transferencia</div><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Responsable *</div><input type="text" id="vdTransferResponsable" placeholder="Ej: Mikaela · Sra. Rosa" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">Banco *</div><input type="text" id="vdTransferBanco" placeholder="Ej: Pichincha" autocomplete="off" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;margin-bottom:8px;"><div style="font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:4px;">No. de confirmación *</div><input type="text" id="vdTransferCodigo" placeholder="Ej: 548921 · ABC-9821" autocomplete="off" inputmode="text" style="padding:11px 12px;border-radius:12px;border:1.5px solid var(--line);font-family:inherit;font-size:14px;font-weight:700;background:var(--bg-card);color:var(--ink);box-sizing:border-box;width:100%;"></div>
       <button onclick="vdPagarAhora()" style="width:100%;padding:14px;background:none;border:none;font-family:inherit;font-size:16px;font-weight:800;color:var(--accent);cursor:pointer;">Pagar ahora</button>
     </div>
 
@@ -1724,7 +1769,7 @@
     <div id="as1FinishBtns">
       <button class="btn-primary" style="margin-bottom: 10px;" onclick="window.finishSlot1(); return false;">Finalizar servicio</button>
     </div>
-    <button class="btn-primary outline" id="as1DevolverBtn" style="color: var(--danger); border-color: var(--danger-bg);" onclick="devolverALista(1)">Devolver a lista</button>
+    <button class="btn-primary outline" id="as1DevolverBtn" style="color: var(--danger); background: #fff; border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 4px 12px rgba(0,0,0,0.10), 0 1px 3px rgba(0,0,0,0.06);" onclick="devolverALista(1)">Devolver a central</button>
 
     <nav class="nav">
       <button onclick="show('staffHome')"><span class="icon"><svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M10.55 2.533a2.25 2.25 0 0 1 2.9 0l7.25 6.327A2.25 2.25 0 0 1 21.5 10.7V19a2 2 0 0 1-2 2h-4a1 1 0 0 1-1-1v-4h-3v4a1 1 0 0 1-1 1H6.5a2 2 0 0 1-2-2v-8.3a2.25 2.25 0 0 1 .8-1.74l5.25-4.427Z"/></svg></span></button>
@@ -1858,6 +1903,7 @@
               <option>Volumen ruso</option>
               <option>Mega volumen ruso Kylie</option>
               <option>Volumen egipcio</option>
+              <option>Volumen griego</option>
               <option>Volumen tecnológico</option>
               <option>Volumen hawaiano</option>
               <option>Mega volumen ruso</option>
@@ -2203,7 +2249,7 @@
     </div>
 
     <button class="btn-primary" style="margin-bottom: 10px;" onclick="finishSlot2()">Finalizar servicio</button>
-    <button class="btn-primary outline" style="color: var(--danger); border-color: var(--danger-bg);" onclick="devolverALista(2)">Devolver a lista</button>
+    <button class="btn-primary outline" id="as2DevolverBtn" style="color: var(--danger); background: #fff; border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 4px 12px rgba(0,0,0,0.10), 0 1px 3px rgba(0,0,0,0.06);" onclick="devolverALista(2)">Devolver a central</button>
 
     <nav class="nav">
       <button onclick="show('staffHome')"><span class="icon"><svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M10.55 2.533a2.25 2.25 0 0 1 2.9 0l7.25 6.327A2.25 2.25 0 0 1 21.5 10.7V19a2 2 0 0 1-2 2h-4a1 1 0 0 1-1-1v-4h-3v4a1 1 0 0 1-1 1H6.5a2 2 0 0 1-2-2v-8.3a2.25 2.25 0 0 1 .8-1.74l5.25-4.427Z"/></svg></span></button>
@@ -2472,7 +2518,7 @@
     <div class="header">
       <button class="back-btn" onclick="volverInicioDesdeHistorial()">← Inicio</button>
     </div>
-    <div class="section-title" style="margin-top:8px;"><span>📋 Historial de servicios</span></div>
+    <div class="section-title" style="margin-top:8px;"><span><svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" style="vertical-align:-3px;margin-right:6px;" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>Historial de servicios</span></div>
     <div style="padding:0 4px;">
       <input id="histBuscarInput" type="text" placeholder="Buscar clienta por nombre o código…" oninput="histFiltrarClientas(this.value)"
         style="width:100%;padding:12px 14px;border:1.5px solid var(--line);border-radius:var(--radius-pill);font-family:inherit;font-size:14px;box-sizing:border-box;" />
@@ -2481,7 +2527,56 @@
     <div id="histPerfil" style="display:none;padding:0 4px;margin-top:10px;"></div>
   </div>
 
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <!-- CENTRAL/OWNER · RECORDATORIOS (seguimientos)                       -->
+  <!-- Genera la oportunidad de contacto; NO envía mensajes.              -->
+  <!-- Abrir WhatsApp != contactada: el contacto se registra sólo con la  -->
+  <!-- acción explícita "Marcar contactada".                              -->
+  <!-- LENGUAJE: "Recordatorio / Seguimiento / Contactar". NUNCA          -->
+  <!-- "Próximo retoque recomendado" — ese concepto pertenece a la ficha  -->
+  <!-- de pigmentación (proxRetoque +37 d), que no se toca ni se mezcla.  -->
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <div class="screen" id="recordatoriosCentral">
+    <div class="header">
+      <button class="back-btn" onclick="volverDesdeRecordatorios()">← Volver</button>
+    </div>
+    <div class="section-title" style="margin-top:8px;display:flex;align-items:center;gap:6px;">
+      <span>Recordatorios</span>
+      <span style="margin-left:auto;font-size:10px;color:var(--ink-faint);letter-spacing:0;text-transform:none;cursor:pointer;" onclick="loadRecordatorios()">↻ Actualizar</span>
+    </div>
+    <div style="font-size:12px;color:var(--ink-soft);margin-bottom:12px;font-weight:500;line-height:1.5;">
+      Clientas a las que corresponde dar seguimiento según su último servicio. Abrir WhatsApp <strong>no</strong> registra el contacto: usá &ldquo;Marcar contactada&rdquo; cuando hayas enviado el mensaje.
+    </div>
+
+    <div id="recContenido"></div>
+  </div>
+
   <!-- OWNER: CAJA CHICA (vista solo lectura) -->
+  <!-- OWNER · VERIFICACIÓN DE PAGOS (conciliación; no modifica el cobro) -->
+  <div class="screen" id="ownerPagosVerificacion">
+    <div class="header">
+      <!-- Retorno contextual: el Owner vuelve a su resumen; Rosa (staff) vuelve
+           a staffHome. Rosa nunca debe terminar viendo ownerHome. -->
+      <button class="back-btn" onclick="volverDesdeVerificacion()">← Volver</button>
+    </div>
+    <div class="section-title" style="margin-top:8px;display:flex;align-items:center;gap:6px;">
+      <span>Verificación de pagos</span>
+      <span id="pvRefreshBtn" style="margin-left:auto;font-size:10px;color:var(--ink-faint);letter-spacing:0;text-transform:none;cursor:pointer;" onclick="loadPagosVerificacion()">↻ Actualizar</span>
+    </div>
+    <div style="font-size:12px;color:var(--ink-soft);margin-bottom:12px;font-weight:500;line-height:1.5;">
+      <svg class="nx-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;margin-right:4px;" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.9-3.4 8.5-8 10-4.6-1.5-8-5.1-8-10V6l8-3Z"/><path d="M9 12.5 11.5 15 15 9.5"/></svg> Marcá un pago cuando confirmes que el dinero existe: efectivo en caja, transferencia en el banco, tarjeta en el POS. Esto <strong>no</strong> modifica el cobro.
+    </div>
+
+    <div style="display:flex;gap:8px;margin-bottom:6px;">
+      <button id="pvBtn_dia"    onclick="pvSetFiltro('hoy')"    style="flex:1;padding:9px 0;border-radius:10px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:800;font-size:12px;cursor:pointer;">DÍA</button>
+      <button id="pvBtn_semana" onclick="pvSetFiltro('semana')" style="flex:1;padding:9px 0;border-radius:10px;border:1px solid var(--line);background:var(--bg-card);color:var(--ink);font-weight:800;font-size:12px;cursor:pointer;">SEMANA</button>
+      <button id="pvBtn_mes"    onclick="pvSetFiltro('mes')"    style="flex:1;padding:9px 0;border-radius:10px;border:1px solid var(--line);background:var(--bg-card);color:var(--ink);font-weight:800;font-size:12px;cursor:pointer;">MES</button>
+    </div>
+    <div id="pvRangoLabel" style="font-size:11px;color:var(--ink-faint);margin-bottom:12px;text-align:center;"></div>
+
+    <div id="pvContenido"></div>
+  </div>
+
   <div class="screen" id="ownerCaja">
     <div class="header">
       <button class="back-btn" onclick="show('ownerHome')">← Resumen</button>
@@ -2858,15 +2953,19 @@
 
   <!-- NEXSERV Core JS — Fase 2 partición -->
   <script src="js/state.js?v=20260706a"></script>
-  <script src="js/api.js?v=20260713c"></script>
-  <script src="js/lineaService.js?v=20260710a"></script>
-  <script src="js/router.js?v=20260706a"></script>
+  <script src="js/api.js?v=20260902a"></script>
+  <script src="js/lineaService.js?v=20260902a"></script>
+  <script src="js/router.js?v=20260815b"></script>
   <script src="js/app.js?v=20260706a"></script>
-  <script src="nexserv-main-1.js?v=20260903a"></script>
-  <script src="js/nexserv-main-2.js?v=20260715c"></script>
+  <script src="js/evidencias-core.js?v=20260815e"></script>
+  <script src="nexserv-main-1.js?v=20260903c"></script>
+  <script src="js/nexserv-main-2.js?v=20260903b"></script>
   <script src="js/nexserv-nuevacita.js?v=20260711a"></script>
-  <script src="js/nexserv-main-3.js?v=20260717a"></script>
-  <script src="js/nexserv-main-4.js?v=20260717e"></script>
+  <script src="js/nexserv-main-3.js?v=20260902a"></script>
+  <script src="js/nexserv-main-4.js?v=20260902a"></script>
+  <script src="js/pagos-verificacion.js?v=20260819a"></script>
+  <!-- Módulo Recordatorios: independiente, no toca main-1..4. -->
+  <script src="js/nexserv-recordatorios.js?v=20260818a"></script>
 
 
 <!-- ============================================ -->
@@ -2990,6 +3089,7 @@ const STAFF_PUSH_MAP = {
   'Keyla':    'push_keyla',
   'Lesly':    'push_lesly',
   'Rosa':     'push_rosa',
+  'Melany':   'push_melany',
   'Yadira':   'push_yadira',
   'Diana':    'push_diana',
   'Laura':    'push_laura',
@@ -3068,7 +3168,7 @@ async function suscribirPushActual() {
     // Si el archivo aún no está subido, cae al SW principal y sigue andando en primer plano.
     let fcmReg = reg;
     try {
-      fcmReg = await navigator.serviceWorker.register('/nexserv/firebase-messaging-sw.js', { scope: '/nexserv/firebase-cloud-messaging-push-scope' });
+      fcmReg = await navigator.serviceWorker.register('./firebase-messaging-sw.js', { scope: './firebase-cloud-messaging-push-scope' });
       // Esperar a que el SW de Firebase esté ACTIVO antes de suscribir
       // (recién registrado puede estar instalándose → "no active Service Worker")
       if (!fcmReg.active) {
@@ -3081,7 +3181,7 @@ async function suscribirPushActual() {
             });
           });
         }
-        fcmReg = (await navigator.serviceWorker.getRegistration('/nexserv/firebase-cloud-messaging-push-scope')) || fcmReg;
+        fcmReg = (await navigator.serviceWorker.getRegistration('./firebase-cloud-messaging-push-scope')) || fcmReg;
       }
       // Si todavía no quedó activo, usar el SW principal (que sí lo está)
       if (!fcmReg.active) { console.log('[Push] FCM SW aún no activo, uso SW principal'); fcmReg = reg; }
@@ -3099,10 +3199,22 @@ async function suscribirPushActual() {
         try {
           (fcmReg || reg).showNotification(n.title, {
             body: n.body || '',
-            icon: 'https://humbertods.github.io/nexserv/icon-192x192.png',
+            icon: location.origin + (window.NEXSERV_BASE_PATH || '/') + 'icon-192x192.png',
             tag: 'nexserv-cita', renotify: true, vibrate: [200, 100, 200]
           });
         } catch (e) {}
+        // TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME — sin title/body/datos de clienta
+        try {
+          _nexLatAbrir('fcm');
+          _nexLat('T0 FCM', {
+            role: (window.currentUser && window.currentUser.role) || 'sin-sesion',
+            activeScreenId: _nexPantallaActiva()
+          });
+        } catch (e) {}
+        // /TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME
+        // Señal de refresco dirigido. Best-effort: si falla, la notificación
+        // ya se mostró y el fallback focus/visibility sigue cubriendo.
+        try { nexRefrescarUI('fcm'); } catch (e) {}
       });
     } catch (e) {}
 
@@ -3166,7 +3278,7 @@ async function enviarPushStaff(nombres, titulo, cuerpo) {
 async function probarNotificaciones() {
   const staffMap = {
     'push_maria':'María', 'push_keyla':'Keyla', 'push_lesly':'Lesly', 'push_rosa':'Rosa',
-    'push_yadira':'Yadira', 'push_diana':'Diana', 'push_laura':'Laura'
+    'push_melany':'Melany', 'push_yadira':'Yadira', 'push_diana':'Diana', 'push_laura':'Laura'
   };
   const keys = Object.keys(staffMap);
 
@@ -3278,6 +3390,171 @@ window.eliminarTicketEspera = eliminarTicketEspera;
   document.addEventListener('mouseup', cancel);
   document.addEventListener('mouseleave', cancel);
 })();
+
+// TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME — instrumentación, remover tras medir
+// Solo console.log. Cero requests, cero cambios de comportamiento.
+// NUNCA registra nombres de clientas, títulos ni cuerpos de notificación.
+window._nexLatTrace = { id: 0, t0: 0, abierta: false };
+function _nexLatReloj() {
+  return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+function _nexLatAbrir(origen) {
+  const tr = window._nexLatTrace;
+  tr.id++; tr.t0 = _nexLatReloj(); tr.abierta = true;
+  return tr;
+}
+function _nexLat(etapa, extra) {
+  try {
+    const tr = window._nexLatTrace;
+    const d = tr.t0 ? Math.round(_nexLatReloj() - tr.t0) : 0;
+    console.log('[NEX-LAT]', etapa, 'trace#' + tr.id, '+' + d + 'ms', 'ts=' + Date.now(),
+                extra ? JSON.stringify(extra) : '');
+  } catch (e) {}
+}
+window._nexLat = _nexLat;
+window._nexLatAbrir = _nexLatAbrir;
+// /TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME
+
+// ══════════════════════════════════════════════════════════════════
+// NexServ · Refresco dirigido de UI (INC-LATENCIA-ASIGNACION-STAFF)
+// El push es SEÑAL, nunca fuente de verdad: solo dispara una LECTURA
+// de la pantalla activa. No lee payload.data, no escribe estado, no
+// ejecuta ninguna acción comercial.
+// ══════════════════════════════════════════════════════════════════
+window._nexRefresh = { ultimo: 0, timer: null, enVuelo: false, pendiente: null };
+
+function _nexPantallaActiva() {
+  const el = document.querySelector('.screen.active');
+  return el ? el.id : '';
+}
+
+// Un evento FCM representa un CAMBIO NUEVO en el backend: debe poder forzar
+// una lectura real, sin quedar absorbido por la ventana de frescura de la
+// cola. focus/visibility sí pueden reutilizar la cola fresca.
+function _nexEsFCM(origen) {
+  return String(origen || '').indexOf('fcm') !== -1;
+}
+
+async function _nexRefrescarAhora(origen) {
+  const st = window._nexRefresh;
+  const u = window.currentUser;
+  if (!u) return;
+  const pantalla = _nexPantallaActiva();
+  st.enVuelo = true;
+  // TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME
+  var _latRoute = 'NONE';
+  if (u.role === 'staff') {
+    if (pantalla === 'waitList') _latRoute = 'queue+renderWaitList';
+    else if (pantalla === 'staffHome') _latRoute = 'queue+loadStaffHome';
+    else _latRoute = 'queue-only';
+  } else if (u.role === 'admin' || u.area === 'admin') {
+    if (pantalla === 'mikaelaHome') _latRoute = 'loadMikaelaHome';
+  }
+  try { _nexLat('T2 REFRESH_EXEC', { origen: origen, role: u.role, activeScreenId: pantalla, ROUTE: _latRoute }); } catch (e) {}
+  // /TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME
+  try {
+    if (u.role === 'staff') {
+      // INC-LATENCIA-TICKET-STAFF — la cola se refresca SIEMPRE, sin importar
+      // la pantalla: así el ticket ya está disponible cuando la staff entra a
+      // waitList, y badges/"Por empezar" quedan al día donde esté.
+      // No navega, no abre pantallas, no ejecuta acciones comerciales.
+      if (typeof refreshStaffQueue === 'function') {
+        await refreshStaffQueue('fcm:' + origen, { forzar: _nexEsFCM(origen) });
+      }
+      if (pantalla === 'waitList' && typeof renderWaitList === 'function') {
+        await renderWaitList();
+      } else if (pantalla === 'staffHome' && typeof loadStaffHome === 'function') {
+        await loadStaffHome();
+      }
+    } else if (u.role === 'admin' || u.area === 'admin') {
+      if (pantalla === 'mikaelaHome' && typeof loadMikaelaHome === 'function') {
+        await loadMikaelaHome();
+      }
+    }
+    console.log('[nexRefresh]', origen, u.role, pantalla);
+  } catch (e) {
+    console.warn('[nexRefresh] error:', e && e.message);
+  } finally {
+    st.enVuelo = false;
+    // TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME
+    try {
+      _nexLat('T8 REFRESH_END', { ROUTE: _latRoute, pendiente: st.pendiente ? 'SI' : 'NO' });
+      if (!st.pendiente) window._nexLatTrace.abierta = false;
+    } catch (e) {}
+    // /TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME
+    // Trailing: un evento que llegó DURANTE la lectura no se pierde — la
+    // lectura recién terminada pudo haber salido antes del cambio.
+    if (st.pendiente) {
+      const _o = st.pendiente;
+      st.pendiente = null;
+      st.ultimo = Date.now();
+      if (st.timer) clearTimeout(st.timer);
+      st.timer = setTimeout(function () {
+        st.timer = null;
+        _nexRefrescarAhora(_o + '+pendiente');
+      }, 0);
+    }
+  }
+}
+
+// Coalescencia 400 ms. Push + focus + visibilitychange casi simultáneos
+// producen UN solo refresh. Eventos separados por más de 400 ms no se
+// pierden. Un evento llegado con una lectura en vuelo queda pendiente y
+// se ejecuta al terminar (nunca dos requests concurrentes).
+function nexRefrescarUI(origen) {
+  const st = window._nexRefresh;
+  // TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME
+  try {
+    if (!window._nexLatTrace.abierta) _nexLatAbrir(origen);
+    _nexLat('T1 REFRESH_REQUEST', {
+      origen: origen,
+      activeScreenId: _nexPantallaActiva(),
+      enVuelo: st.enVuelo,
+      pendiente: st.pendiente ? 'SI' : 'NO',
+      resultado: st.enVuelo ? 'ENCOLADO'
+               : ((Date.now() - st.ultimo < 400)
+                    ? (_nexEsFCM(origen) ? 'COALESCIDO_FCM_TRAILING' : 'COALESCIDO')
+                    : 'EJECUTA'),
+      forzaraLectura: _nexEsFCM(origen) ? 'SI' : 'NO'
+    });
+  } catch (e) {}
+  // /TEMP INC-LATENCIA-TICKET-STAFF-RUNTIME
+  if (st.enVuelo) {
+    // Un FCM pendiente tiene prioridad sobre un focus/visibility pendiente:
+    // representa un cambio nuevo y debe forzar lectura real al reanudar.
+    st.pendiente = _nexEsFCM(st.pendiente) ? st.pendiente : origen;
+    return;
+  }
+  const ahora = Date.now();
+  if (ahora - st.ultimo < 400) {
+    // focus/visibility dentro de la ventana → se descartan (misma ráfaga).
+    // Un FCM NO se descarta: puede ser una asignación nueva. Queda pendiente
+    // y se ejecuta al cerrar la ventana, nunca en paralelo.
+    if (_nexEsFCM(origen)) {
+      st.pendiente = origen;
+      if (!st.timer) {
+        const _espera = Math.max(0, 400 - (ahora - st.ultimo));
+        st.timer = setTimeout(function () {
+          st.timer = null;
+          const _o = st.pendiente;
+          st.pendiente = null;
+          if (_o) { st.ultimo = Date.now(); _nexRefrescarAhora(_o + '+trailing'); }
+        }, _espera);
+      }
+    }
+    return;
+  }
+  st.ultimo = ahora;
+  _nexRefrescarAhora(origen);
+}
+window.nexRefrescarUI = nexRefrescarUI;
+
+// Red de seguridad: cubre FCM no registrado, token vencido, notificaciones
+// bloqueadas y app suspendida. La lógica comercial nunca depende del push.
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible') nexRefrescarUI('visibility');
+});
+window.addEventListener('focus', function () { nexRefrescarUI('focus'); });
 
 const _origDoLogin = window.doLogin;
 window.doLogin = async function(...args) {

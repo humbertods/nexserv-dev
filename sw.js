@@ -1,4 +1,4 @@
-const CACHE_NAME = 'nexserv-v20260902';
+const CACHE_NAME = 'nexserv-v20260903c';
 
 self.addEventListener('install', e => {
   self.skipWaiting();

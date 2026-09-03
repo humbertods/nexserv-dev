@@ -795,9 +795,12 @@
               + '&#9989; Termin&eacute; &mdash; mandar a central</button>';
             return;
           }
-          if (!_sigId && _pendientes > 0) {
-            btnContainer.innerHTML =
-              '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--accent);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
+          if (_pendientes > 0) {
+            var _yoSigoBtn = _sigId
+              ? '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--ink);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;" onclick="window._finishingSlot=' + _slotN + '; nativoYoSigo(\'' + _esc(_refNat) + '\',\'' + _esc(_sigId) + '\')">Yo sigo: ' + _sigLbl + '</button>'
+              : '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--ink);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;" onclick="window._finishingSlot=' + _slotN + '; nativoYoSigo(\'' + _esc(_refNat) + '\',\'' + _esc(_sigId) + '\')">Yo sigo: ' + _sigLbl + '</button>';
+            btnContainer.innerHTML = _yoSigoBtn
+              + '<button style="margin-bottom:8px;width:100%;padding:14px;background:var(--accent);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
               + ' onclick="window._finishingSlot=' + _slotN + '; nativoPasarOtraStaff(\'' + _esc(_refNat) + '\',' + _idsMias + ')">'
               + 'Ya termin&eacute; mi parte &mdash; enviar a central para la siguiente staff</button>'
               + '<button style="margin-bottom:8px;width:100%;padding:14px;background:linear-gradient(135deg,#2d6a4f,#1a4a32);border:none;border-radius:var(--radius-pill);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:white;"'
@@ -926,8 +929,8 @@
     }
     // ── FIN TICKET MULTI ─────────────────────────────────────
 
-    if (!promoData || !promoData.promo) {
-      // Sin promo — botón directo sin abrir modal de opciones
+    if ((!promoData || !promoData.promo) && !_esSlotNativoLineas(slot1 ? 1 : 2)) {
+      // Sin promo — botón directo sin abrir modal de opciones — LEGACY ONLY (nativo ya atendido arriba)
       const _slotNP = slot1 ? 1 : 2;
       btnContainer.innerHTML = `
         <button class="btn-primary" style="margin-bottom:10px;background:var(--ink);color:white;font-size:14px;padding:16px;"
@@ -937,8 +940,8 @@
       return;
     }
 
-    // Si el ticket es SN- (normal), botón directo — no pasar por finishSlot1 que requiere promoData
-    if (_idEsperaSlot.startsWith('SN-')) {
+    // Si el ticket es SN- (normal), botón directo — no pasar por finishSlot1 que requiere promoData — LEGACY ONLY
+    if (_idEsperaSlot.startsWith('SN-') && !_esSlotNativoLineas(slot1 ? 1 : 2)) {
       const _slotSN = slot1 ? 1 : 2;
       btnContainer.innerHTML = `
         <button class="btn-primary" style="margin-bottom:10px;background:var(--ink);color:white;font-size:14px;padding:16px;"
@@ -1364,7 +1367,17 @@
     try {
       const user = window.currentUser;
       if (!user) return;
-      if ((slotServices[slot] || []).length > 0) return; // ya hay servicios → no tocar
+      if ((slotServices[slot] || []).length > 0) {
+        // Los servicios ya están: no hay que reconstruirlos. PERO los botones sí
+        // hay que evaluarlos. En el camino de RECARGA nadie más llama a
+        // updateFinishButtons, así que el contenedor se quedaba con su contenido
+        // estático de index.html ("Finalizar servicio") y el modal nativo no
+        // aparecía nunca — aunque el guard fuera true y el backend reportara
+        // pendientes. Es idempotente: para legacy repinta la misma rama que
+        // habría pintado igual.
+        try { updateFinishButtons(slot); } catch (eUFB) {}
+        return;
+      }
       const idEspera = slot === 1 ? (window._as1IdEspera || '') : (window._as2IdEspera || '');
       if (idEspera.startsWith('TM-')) return; // TM se restaura por otra ruta
       const clientName = document.getElementById('as' + slot + 'Name')?.textContent?.replace(' ⭐', '') || '';
